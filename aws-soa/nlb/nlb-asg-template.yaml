@@ -1,0 +1,412 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Private NLB with Auto Scaling Group for Web API'
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair
+
+Resources:
+  # 1. VPC
+  SoaVpcMain:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.7.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: soa-vpc-main
+
+  # 2. Public Subnets
+  SoaSubnetPublic01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SoaVpcMain
+      CidrBlock: 10.7.1.0/24
+      AvailabilityZone: !Sub ${AWS::Region}a
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: soa-subnet-public-01
+
+  SoaSubnetPublic02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SoaVpcMain
+      CidrBlock: 10.7.2.0/24
+      AvailabilityZone: !Sub ${AWS::Region}b
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: soa-subnet-public-02
+
+  # 3. Private Subnets
+  SoaSubnetPrivate01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SoaVpcMain
+      CidrBlock: 10.7.3.0/24
+      AvailabilityZone: !Sub ${AWS::Region}a
+      Tags:
+        - Key: Name
+          Value: soa-subnet-private-01
+
+  SoaSubnetPrivate02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SoaVpcMain
+      CidrBlock: 10.7.4.0/24
+      AvailabilityZone: !Sub ${AWS::Region}b
+      Tags:
+        - Key: Name
+          Value: soa-subnet-private-02
+
+  # 4. Internet Gateway
+  SoaIgwMain:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: soa-igw-main
+
+  SoaIgwMainAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref SoaVpcMain
+      InternetGatewayId: !Ref SoaIgwMain
+
+  # 5. NAT Gateway
+  SoaEipNatGateway:
+    Type: AWS::EC2::EIP
+    DependsOn: SoaIgwMainAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: soa-eip-nat-gateway
+
+  SoaNatGatewayPublic01:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt SoaEipNatGateway.AllocationId
+      SubnetId: !Ref SoaSubnetPublic01
+      Tags:
+        - Key: Name
+          Value: soa-nat-gateway-public-01
+
+  # 6. Public Route Table
+  SoaRtPublic:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SoaVpcMain
+      Tags:
+        - Key: Name
+          Value: soa-rt-public
+
+  SoaRoutePublicInternet:
+    Type: AWS::EC2::Route
+    DependsOn: SoaIgwMainAttachment
+    Properties:
+      RouteTableId: !Ref SoaRtPublic
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref SoaIgwMain
+
+  SoaRtPublicAssociation01:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SoaSubnetPublic01
+      RouteTableId: !Ref SoaRtPublic
+
+  SoaRtPublicAssociation02:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SoaSubnetPublic02
+      RouteTableId: !Ref SoaRtPublic
+
+  # 7. Private Route Table
+  SoaRtPrivate:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SoaVpcMain
+      Tags:
+        - Key: Name
+          Value: soa-rt-private
+
+  SoaRoutePrivateInternet:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref SoaRtPrivate
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref SoaNatGatewayPublic01
+
+  SoaRtPrivateAssociation01:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SoaSubnetPrivate01
+      RouteTableId: !Ref SoaRtPrivate
+
+  SoaRtPrivateAssociation02:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SoaSubnetPrivate02
+      RouteTableId: !Ref SoaRtPrivate
+
+  # 8. IAM Role cho SSM Session Manager
+  SoaRoleEc2SsmAccess:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: soa-role-ec2-ssm-access
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Name
+          Value: soa-role-ec2-ssm-access
+
+  SoaInstanceProfileEc2SsmAccess:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: soa-instance-profile-ec2-ssm-access
+      Roles:
+        - !Ref SoaRoleEc2SsmAccess
+
+  # 9. Security Group cho NLB
+  SoaSgNlbPrivate:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: soa-sg-nlb-private
+      GroupDescription: Security group for private NLB
+      VpcId: !Ref SoaVpcMain
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 10.7.0.0/16
+          Description: HTTP access from VPC
+      Tags:
+        - Key: Name
+          Value: soa-sg-nlb-private
+
+  # 10. Security Group cho Web API
+  SoaSgWebApi:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: soa-sg-web-api
+      GroupDescription: Security group for web API instances
+      VpcId: !Ref SoaVpcMain
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref SoaSgNlbPrivate
+          Description: HTTP access from NLB
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+      Tags:
+        - Key: Name
+          Value: soa-sg-web-api
+
+  # 11. Target Group
+  SoaTgWebApi:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: soa-tg-web-api
+      Port: 80
+      Protocol: TCP
+      VpcId: !Ref SoaVpcMain
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Tags:
+        - Key: Name
+          Value: soa-tg-web-api
+
+  # 12. Private Network Load Balancer
+  SoaNlbPrivateWebApi:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: soa-nlb-private-web-api
+      Type: network
+      Scheme: internal
+      SecurityGroups:
+        - !Ref SoaSgNlbPrivate
+      Subnets:
+        - !Ref SoaSubnetPrivate01
+        - !Ref SoaSubnetPrivate02
+      Tags:
+        - Key: Name
+          Value: soa-nlb-private-web-api
+
+  SoaNlbListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref SoaTgWebApi
+      LoadBalancerArn: !Ref SoaNlbPrivateWebApi
+      Port: 80
+      Protocol: TCP
+
+  # 13. Launch Template
+  SoaLtWebApiTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: soa-lt-web-api-template
+      VersionDescription: web api
+      LaunchTemplateData:
+        ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64}}'
+        InstanceType: t2.micro
+        KeyName: !Ref KeyPairName
+        IamInstanceProfile:
+          Arn: !GetAtt SoaInstanceProfileEc2SsmAccess.Arn
+        SecurityGroupIds:
+          - !Ref SoaSgWebApi
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            yum update -y
+            yum install -y httpd.x86_64
+            systemctl start httpd.service
+            systemctl enable httpd.service
+            echo "Hello World from $(hostname -f)" > /var/www/html/index.html
+            
+            # Signal CloudFormation that instance is ready
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource SoaAsgWebApi --region ${AWS::Region}
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: soa-ec2-web-api
+
+  # 14. Auto Scaling Group
+  SoaAsgWebApi:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn: 
+      - SoaRoutePrivateInternet
+      - SoaNatGatewayPublic01
+    Properties:
+      AutoScalingGroupName: soa-asg-web-api
+      LaunchTemplate:
+        LaunchTemplateId: !Ref SoaLtWebApiTemplate
+        Version: !GetAtt SoaLtWebApiTemplate.LatestVersionNumber
+      VPCZoneIdentifier:
+        - !Ref SoaSubnetPrivate01
+        - !Ref SoaSubnetPrivate02
+      TargetGroupARNs:
+        - !Ref SoaTgWebApi
+      DesiredCapacity: 1
+      MinSize: 1
+      MaxSize: 2
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      Tags:
+        - Key: Name
+          Value: soa-asg-web-api
+          PropagateAtLaunch: false
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT10M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 0
+        MaxBatchSize: 1
+        PauseTime: PT10M
+        WaitOnResourceSignals: true
+
+  # 15. Auto Scaling Policy
+  SoaAsgPolicyTargetTracking:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref SoaAsgWebApi
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 50.0
+
+  # 16. Bastion Host để test
+  SoaSgBastion:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: soa-sg-bastion
+      GroupDescription: Security group for bastion host
+      VpcId: !Ref SoaVpcMain
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+      Tags:
+        - Key: Name
+          Value: soa-sg-bastion
+
+  SoaEc2Bastion:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - SoaRoutePublicInternet
+      - SoaIgwMainAttachment
+    Properties:
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64}}'
+      InstanceType: t2.micro
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref SoaSubnetPublic01
+      IamInstanceProfile: !Ref SoaInstanceProfileEc2SsmAccess
+      SecurityGroupIds:
+        - !Ref SoaSgBastion
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y curl
+          
+          # Install SSM agent (should be pre-installed on AL2023)
+          yum install -y amazon-ssm-agent
+          systemctl enable amazon-ssm-agent
+          systemctl start amazon-ssm-agent
+      Tags:
+        - Key: Name
+          Value: soa-ec2-bastion
+
+Outputs:
+  VpcId:
+    Description: VPC ID
+    Value: !Ref SoaVpcMain
+    Export:
+      Name: !Sub ${AWS::StackName}-VpcId
+
+  NlbDnsName:
+    Description: Private NLB DNS Name
+    Value: !GetAtt SoaNlbPrivateWebApi.DNSName
+    Export:
+      Name: !Sub ${AWS::StackName}-NlbDnsName
+
+  BastionPublicIp:
+    Description: Bastion Host Public IP
+    Value: !GetAtt SoaEc2Bastion.PublicIp
+    Export:
+      Name: !Sub ${AWS::StackName}-BastionPublicIp
+
+  TestCommand:
+    Description: Command to test the NLB using SSM Session Manager
+    Value: !Sub 'aws ssm start-session --target <INSTANCE_ID> --region ${AWS::Region}'
+
+  SsmConnectInstructions:
+    Description: Instructions to connect and test
+    Value: |
+      1. Connect to bastion: aws ssm start-session --target <BASTION_INSTANCE_ID>
+      2. Test NLB: curl http://<NLB_DNS_NAME>
+      3. Connect to web instance: aws ssm start-session --target <WEB_INSTANCE_ID>

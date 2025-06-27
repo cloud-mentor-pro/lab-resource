@@ -1,1 +1,1 @@
-# lab-resource
+# Lab Resource for Cloud Mentor Pro class/blog
