@@ -1,3 +1,3 @@
-[submodule "aws-soa/SOA-Sam-Demo"]
-	path = aws-soa/SOA-Sam-Demo
-	url = git@github.com:longngo192/SOA-Sam-Demo.git
+[submodule "aws-soa/sam-demo/SOA-Sam-Demo"]
+	path = aws-soa/sam-demo/SOA-Sam-Demo
+	url = https://github.com/longngo192/SOA-Sam-Demo
