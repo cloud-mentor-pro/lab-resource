@@ -23,7 +23,7 @@ Resources:
       EnableDnsSupport: true
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-AWS-VPC'
+          Value: !Sub '${TagPrefix}-VPC'
 
   PrivateSubnet:
     Type: AWS::EC2::Subnet
@@ -34,7 +34,7 @@ Resources:
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-AWS-Private-Subnet'
+          Value: !Sub '${TagPrefix}-Private-Subnet'
 
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
@@ -42,7 +42,7 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-AWS-Private-RT'
+          Value: !Sub '${TagPrefix}-Private-RT'
 
   PrivateSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -53,7 +53,7 @@ Resources:
   VPNSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub '${TagPrefix}-AWS-VPN-SG'
+      GroupName: !Sub '${TagPrefix}-VPN-SG'
       GroupDescription: 'Security group for VPN connection and SSM'
       VpcId: !Ref VPC
       SecurityGroupIngress:
@@ -67,7 +67,7 @@ Resources:
           CidrIp: 192.168.0.0/22
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-AWS-VPN-SG'
+          Value: !Sub '${TagPrefix}-VPN-SG'
 
   EC2Instance:
     Type: AWS::EC2::Instance
@@ -115,7 +115,7 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-AWS-EC2-SSM-Role'
+          Value: !Sub '${TagPrefix}-EC2-SSM-Role'
 
   CustomerGateway:
     Type: AWS::EC2::CustomerGateway
@@ -125,7 +125,7 @@ Resources:
       IpAddress: !Ref CustomerGatewayIp
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-AWS-CustomerGateway'
+          Value: !Sub '${TagPrefix}-CustomerGateway'
 
   VirtualPrivateGateway:
     Type: AWS::EC2::VPNGateway
@@ -133,7 +133,7 @@ Resources:
       Type: ipsec.1
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-AWS-VPNGateway'
+          Value: !Sub '${TagPrefix}-VPNGateway'
 
   VPNGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -153,7 +153,7 @@ Resources:
       StaticRoutesOnly: true
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-AWS-VPNConnection'
+          Value: !Sub '${TagPrefix}-VPNConnection'
 
   VPNConnectionRoute:
     Type: AWS::EC2::VPNConnectionRoute
