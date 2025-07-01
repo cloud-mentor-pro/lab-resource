@@ -1,0 +1,3 @@
+[submodule "aws-soa/sam-demo"]
+	path = aws-soa/sam-demo
+	url = https://github.com/longngo192/SOA-Sam-Demo
