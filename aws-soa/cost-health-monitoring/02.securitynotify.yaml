@@ -1,0 +1,239 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Stack to automate AWS Health security event reports (access key exposed) with EventBridge, Step Functions, and email notification.
+
+Parameters:
+  ReEmailAddress:
+    Type: String
+    Description: Email address to receive security notifications.
+  SendEmailAddress:
+    Type: String
+    Description: Email address to send security notifications (must be verified in SES).
+
+Resources:
+  SOALambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowAWSHealthAndSES
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - health:DescribeEvents
+                  - health:DescribeEventDetails
+                  - health:DescribeAffectedEntities
+                Resource: '*'
+              - Effect: Allow
+                Action: ses:SendEmail
+                Resource: '*'
+
+  SOALambdaGenerateReport:
+      Type: AWS::Lambda::Function
+      Properties:
+        FunctionName: SOA-Lambda-GenerateSecurityReport
+        Handler: index.lambda_handler
+        Role: !GetAtt SOALambdaExecutionRole.Arn
+        Runtime: python3.12
+        Environment:
+          Variables:
+            REC_EMAIL_ADDRESS: !Ref ReEmailAddress
+            SEND_EMAIL_ADDRESS: !Ref SendEmailAddress
+        Code:
+          ZipFile: |
+            import boto3
+            import os
+            import datetime
+            import json
+            from botocore.exceptions import ClientError
+
+            ses = boto3.client('ses')
+
+            def lambda_handler(event, context):
+                # Get event details from input directly (no API call to avoid subscription shit)
+                detail = event.get('detail', {})
+                event_arn = detail.get('eventArn', 'Unknown ARN')
+                event_type_code = detail.get('eventTypeCode', 'Unknown')
+                account_id = event.get('account', 'Unknown')
+                event_time = event.get('time', datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+
+                # Extract description
+                event_descriptions = detail.get('eventDescription', [])
+                reason = 'Access key exposed on internet (no description available)'
+                if event_descriptions:
+                    for desc in event_descriptions:
+                        if desc.get('language', '') == 'en_US':
+                            reason = desc.get('latestDescription', reason)
+                            break
+
+                # Extract affected entities
+                affected_entities = detail.get('affectedEntities', [])
+                exposed_info = []
+                for entity in affected_entities:
+                    entity_value = entity.get('entityValue', 'Unknown')
+                    exposed_info.append(entity_value)  # IAM user/role/access key ID
+
+                # Generate table for related info from event dict
+                related_info_table = '<table style="width:100%; border-collapse: collapse;">'
+                related_info_table += '<tr><th style="border: 1px solid #ddd; padding: 8px;">Key</th><th style="border: 1px solid #ddd; padding: 8px;">Value</th></tr>'
+                for key, value in event.items():
+                    value_str = json.dumps(value, indent=2) if isinstance(value, (dict, list)) else str(value)
+                    related_info_table += f'<tr><td style="border: 1px solid #ddd; padding: 8px;">{key}</td><td style="border: 1px solid #ddd; padding: 8px;">{value_str}</td></tr>'
+                related_info_table += '</table>'
+
+                # Generate HTML report with red/orange warning
+                html = f'''
+                <html>
+                <head>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 20px; color: #333; }}
+                        .container {{ max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border: 2px solid #ff0000; }}
+                        h1 {{ text-align: center; color: #ff0000; }}  /* Red title */
+                        p {{ margin: 10px 0; }}
+                        .warning {{ color: #ff4500; font-weight: bold; }}  /* Orange warning */
+                        .details {{ background-color: #ffebee; padding: 10px; border-radius: 5px; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <h1>Cảnh báo bảo mật nghiêm trọng từ AWS</h1>
+                        <p class="warning">Lý do: {reason}</p>
+                        <p>Account: {account_id}</p>
+                        <p class="details">IAM user/role/access key id bị rò rỉ: {', '.join(exposed_info)}</p>
+                        <p>Thời gian: {event_time}</p>
+                        <p>Các thông tin liên quan:</p>
+                        {related_info_table}
+                    </div>
+                </body>
+                </html>
+                '''
+
+                try:
+                    # Send email
+                    sender_email = os.environ['SEND_EMAIL_ADDRESS']
+                    recipient_email = os.environ['REC_EMAIL_ADDRESS']
+                    ses.send_email(
+                        Source=sender_email,
+                        Destination={'ToAddresses': [recipient_email]},
+                        Message={
+                            'Subject': {'Data': 'Cảnh báo bảo mật nghiêm trọng từ AWS'},
+                            'Body': {
+                                'Html': {'Data': html},
+                                'Text': {'Data': 'Cảnh báo: Access key bị lộ. Kiểm tra ngay!'}
+                            }
+                        }
+                    )
+                    return {'status': 'sent'}
+
+                except ClientError as e:
+                    return {'status': 'error', 'message': str(e)}
+
+  SOAStepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowInvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt SOALambdaGenerateReport.Arn
+
+  SOAStepFunctionSecurityReport:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: SOA-StepFunction-SecurityReport
+      RoleArn: !GetAtt SOAStepFunctionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Workflow for AWS Health security event report",
+          "StartAt": "GenerateReport",
+          "States": {
+            "GenerateReport": {
+              "Type": "Task",
+              "Resource": "${SOALambdaGenerateReport.Arn}",
+              "End": true
+            }
+          }
+        }
+
+  SOAEventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowStartExecution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref SOAStepFunctionSecurityReport
+
+  SOAEventBridgeRuleSecurityEvent:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: SOA-EventBridge-SecurityEvent
+      EventPattern:
+        source:
+          - aws.health
+        detail-type:
+          - AWS Health Event
+        detail:
+          eventTypeCategory:
+            - issue
+          eventTypeCode:
+            - AWS_RISK_CREDENTIALS_EXPOSED  # Filter for access key exposed
+      State: ENABLED
+      Targets:
+        - Arn: !Ref SOAStepFunctionSecurityReport
+          Id: StepFunctionTarget
+          RoleArn: !GetAtt SOAEventBridgeRole.Arn
+
+Outputs:
+  LambdaGenerateReportArn:
+    Value: !GetAtt SOALambdaGenerateReport.Arn
+    Description: ARN của Lambda Generate Security Report
+
+  StepFunctionArn:
+    Value: !Ref SOAStepFunctionSecurityReport
+    Description: ARN của Step Function
+
+  EventBridgeRuleArn:
+    Value: !GetAtt SOAEventBridgeRuleSecurityEvent.Arn
+    Description: ARN của EventBridge Rule
+
+  LambdaExecutionRoleArn:
+    Value: !GetAtt SOALambdaExecutionRole.Arn
+    Description: ARN của IAM Role cho Lambda
+
+  StepFunctionRoleArn:
+    Value: !GetAtt SOAStepFunctionRole.Arn
+    Description: ARN của IAM Role cho Step Function
+
+  EventBridgeRoleArn:
+    Value: !GetAtt SOAEventBridgeRole.Arn
+    Description: ARN của IAM Role cho EventBridge

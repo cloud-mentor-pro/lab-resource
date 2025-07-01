@@ -1,0 +1,512 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Stack to automate daily AWS cost reports with Step Functions parallel execution, including past cost for 24h/7d/1m and forecast in HTML dashboard.
+
+Parameters:
+  ReEmailAddress:
+    Type: String
+    Description: Email address to receive billing notifications.
+  SendEmailAddress:
+    Type: String
+    Description: Email address to send billing notifications.
+
+Resources:
+  SOALambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowCostExplorer
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ce:GetCostAndUsage
+                  - ce:GetCostForecast
+                  - ce:GetDimensionValues
+                  - ce:GetUsageForecast
+                Resource: '*'
+        - PolicyName: AllowSESEmail
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ses:SendEmail
+                Resource: '*'
+
+  SOALambdaGetPastCost:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: SOA-Lambda-GetPastCost
+      Handler: index.lambda_handler
+      Role: !GetAtt SOALambdaExecutionRole.Arn
+      Runtime: python3.12
+      Code:
+        ZipFile: |
+          import boto3
+          import datetime
+          import logging
+          from botocore.exceptions import ClientError
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          cost_explorer = boto3.client('ce')
+
+          def lambda_handler(event, context):
+              today = datetime.date.today()
+              end_date = today - datetime.timedelta(days=1)
+
+              periods = [
+                  {'label': '24h', 'days': 1, 'granularity': 'DAILY'},
+                  {'label': '7_days', 'days': 7, 'granularity': 'DAILY'},
+                  {'label': '30_days', 'days': 30, 'granularity': 'DAILY'}
+              ]
+
+              results = {}
+
+              for period in periods:
+                  try:
+                      start_date = end_date - datetime.timedelta(days=period['days'])
+
+                      response = cost_explorer.get_cost_and_usage(
+                          TimePeriod={
+                              'Start': start_date.strftime('%Y-%m-%d'),
+                              'End': (end_date + datetime.timedelta(days=1)).strftime('%Y-%m-%d')  # End after Start
+                          },
+                          Granularity=period['granularity'],
+                          Metrics=['UnblendedCost'],
+                          GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}]
+                      )
+
+                      period_total = 0.0
+                      service_breakdown = []
+                      currency = 'USD'
+
+                      for timeframe in response.get('ResultsByTime', []):
+                          for group in timeframe.get('Groups', []):
+                              service = group['Keys'][0]
+                              cost = float(group['Metrics']['UnblendedCost']['Amount'])
+                              currency = group['Metrics']['UnblendedCost']['Unit']
+
+                              service_breakdown.append({
+                                  'service': service,
+                                  'cost': round(cost, 2),
+                                  'percentage': 0
+                              })
+                              period_total += cost
+
+                      if period_total > 0:
+                          for service in service_breakdown:
+                              service['percentage'] = round((service['cost'] / period_total) * 100, 1)
+
+                      results[period['label']] = {
+                          'start_date': start_date.strftime('%Y-%m-%d'),
+                          'end_date': end_date.strftime('%Y-%m-%d'),
+                          'total_cost': round(period_total, 2),
+                          'currency': currency,
+                          'services': sorted(service_breakdown, key=lambda x: x['cost'], reverse=True)[:5]
+                      }
+
+                  except ClientError as e:
+                      logger.error(f"AWS Error ({period['label']}): {str(e)}")
+                      results[period['label']] = {'error': f"AWS Error: {e.response['Error']['Message']}"}
+                  except Exception as e:
+                      logger.error(f"Unexpected Error ({period['label']}): {str(e)}", exc_info=True)
+                      results[period['label']] = {'error': f"Processing Error: {str(e)}"}
+
+              return {
+                  'status': 'success',
+                  'data': results
+              }
+
+  SOALambdaGetForecast:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: SOA-Lambda-CostForecast
+      Handler: index.lambda_handler
+      Role: !GetAtt SOALambdaExecutionRole.Arn
+      Runtime: python3.12
+      Code:
+        ZipFile: |
+          import boto3
+          import datetime
+          from botocore.exceptions import ClientError
+
+          cost_explorer = boto3.client('ce')
+
+          def lambda_handler(event, context):
+              forecasts = {}
+
+              try:
+                  today = datetime.date.today()
+
+                  # For 7 days
+                  start_7d = today.strftime('%Y-%m-%d')
+                  end_7d = (today + datetime.timedelta(days=7)).strftime('%Y-%m-%d')
+                  res_7d = cost_explorer.get_cost_forecast(
+                      TimePeriod={'Start': start_7d, 'End': end_7d},
+                      Granularity='DAILY',
+                      Metric='UNBLENDED_COST'
+                  )
+
+                  # For 30 days
+                  start_30d = today.strftime('%Y-%m-%d')
+                  end_30d = (today + datetime.timedelta(days=30)).strftime('%Y-%m-%d')
+                  res_30d = cost_explorer.get_cost_forecast(
+                      TimePeriod={'Start': start_30d, 'End': end_30d},
+                      Granularity='DAILY',
+                      Metric='UNBLENDED_COST'
+                  )
+
+                  forecasts['7_days'] = {
+                      'total': round(float(res_7d['Total']['Amount']), 2),
+                      'currency': res_7d['Total']['Unit'],
+                      'periods': [
+                          {
+                              'date': day['TimePeriod']['Start'],
+                              'amount': round(float(day['MeanValue']), 2)
+                          } for day in res_7d['ForecastResultsByTime']
+                      ]
+                  }
+
+                  forecasts['30_days'] = {
+                      'total': round(float(res_30d['Total']['Amount']), 2),
+                      'currency': res_30d['Total']['Unit'],
+                      'periods': [
+                          {
+                              'date': day['TimePeriod']['Start'],
+                              'amount': round(float(day['MeanValue']), 2)
+                          } for day in res_30d['ForecastResultsByTime']
+                      ]
+                  }
+
+                  return {
+                      'status': 'success',
+                      'data': forecasts
+                  }
+
+              except ClientError as e:
+                  return {'status': 'error', 'message': f"AWS Error: {e.response['Error']['Message']}"}
+              except Exception as e:
+                  return {'status': 'error', 'message': f"Unexpected Error: {str(e)}"}
+
+  SOALambdaSendHTMLReport:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: SOA-Lambda-SendReport
+      Handler: index.lambda_handler
+      Role: !GetAtt SOALambdaExecutionRole.Arn
+      Runtime: python3.12
+      Environment:
+        Variables:
+          REC_EMAIL_ADDRESS: !Ref ReEmailAddress
+          SEND_EMAIL_ADDRESS: !Ref SendEmailAddress
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+          import datetime
+          import json
+
+          ses = boto3.client('ses')
+
+          def lambda_handler(event, context):
+              sender_email = os.environ['SEND_EMAIL_ADDRESS']
+              recipient_email = os.environ['REC_EMAIL_ADDRESS']
+
+              html = f'''
+              <!DOCTYPE html>
+              <html lang="vi">
+              <head>
+                  <meta charset="UTF-8">
+                  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                  <title>Báo Cáo Chi Phí AWS</title>
+                  <style>
+                      body {{ font-family: 'Arial', sans-serif; background-color: #f4f4f4; margin: 0; padding: 20px; color: #333; }}
+                      .container {{ max-width: 1200px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                      h1 {{ text-align: center; color: #007bff; }}
+                      h2 {{ color: #0056b3; margin-top: 30px; }}
+                      table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+                      th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
+                      th {{ background-color: #f2f2f2; }}
+                      .total {{ font-weight: bold; background-color: #e9ecef; }}
+                      .date-range {{ font-style: italic; color: #666; text-align: center; }}
+                      .progress {{ height: 10px; background-color: #e0e0e0; border-radius: 5px; }}
+                      .progress-bar {{ height: 100%; background-color: #4caf50; border-radius: 5px; }}
+                      .forecast-table {{ margin-top: 40px; }}
+                  </style>
+              </head>
+              <body>
+                  <div class="container">
+                      <h1>Báo Cáo Chi Phí AWS - {datetime.date.today().strftime('%Y-%m-%d')}</h1>
+                      
+                      {generate_past_cost_tables(event)}
+                      
+                      {generate_forecast_tables(event)}
+                      
+                      {generate_error_section(event)}
+                  </div>
+              </body>
+              </html>
+              '''
+
+              try:
+                  ses.send_email(
+                      Source=sender_email,
+                      Destination={'ToAddresses': [recipient_email]},
+                      Message={
+                          'Subject': {'Data': 'Báo Cáo Chi Phí AWS - ' + datetime.date.today().strftime('%Y-%m-%d')},
+                          'Body': {
+                              'Html': {'Data': html},
+                              'Text': {'Data': 'Xem phiên bản HTML để có chi tiết đầy đủ báo cáo.'}
+                          }
+                      }
+                  )
+                  return {'status': 'success'}
+              except Exception as e:
+                  return {'status': 'error', 'message': str(e)}
+
+          def generate_past_cost_tables(event):
+              tables = ''
+              if event[0].get('status') == 'success' and 'data' in event[0]:
+                  for period_key in ['24h', '7_days', '30_days']:
+                      period_data = event[0]['data'].get(period_key)
+                      if not period_data:
+                          continue
+                      
+                      if 'error' in period_data:
+                          tables += f'''
+                          <h2>Bảng {period_key.replace('_', ' ').title()}</h2>
+                          <p style="color: red;">Lỗi: {period_data['error']}</p>
+                          '''
+                          continue
+                      
+                      tables += f'''
+                      <h2>Bảng {period_key.replace('_', ' ').title()} (từ {period_data['start_date']} đến {period_data['end_date']})</h2>
+                      <table>
+                          <thead>
+                              <tr>
+                                  <th>Service</th>
+                                  <th>Cost ({period_data['currency']})</th>
+                                  <th>% Trên Tổng (Biểu Đồ Cột)</th>
+                              </tr>
+                          </thead>
+                          <tbody>
+                      '''
+                      
+                      for service in period_data.get('services', []):
+                          tables += f'''
+                          <tr>
+                              <td>{service['service']}</td>
+                              <td>{service['cost']:,.2f} {period_data['currency']}</td>
+                              <td>
+                                  <div class="progress">
+                                      <div class="progress-bar" style="width: {service['percentage']}%;"></div>
+                                  </div>
+                                  {service['percentage']}%
+                              </td>
+                          </tr>
+                          '''
+                      
+                      tables += f'''
+                          <tr class="total">
+                              <td colspan="2">Tổng Chi Phí</td>
+                              <td>{period_data['total_cost']:,.2f} {period_data['currency']}</td>
+                          </tr>
+                          </tbody>
+                      </table>
+                      '''
+              return tables
+
+          def generate_forecast_tables(event):
+              tables = ''
+              if event[1].get('status') == 'success' and 'data' in event[1]:
+                  for forecast_type in ['7_days', '30_days']:
+                      forecast_data = event[1]['data'].get(forecast_type)
+                      if not forecast_data:
+                          continue
+                      
+                      tables += f'''
+                      <h2>Bảng Dự Báo {forecast_type.replace('_', ' ').title()}</h2>
+                      <table class="forecast-table">
+                          <thead>
+                              <tr>
+                                  <th>Period</th>
+                                  <th>Amount ({forecast_data['currency']})</th>
+                              </tr>
+                          </thead>
+                          <tbody>
+                      '''
+                      
+                      for period in forecast_data.get('periods', []):
+                          tables += f'''
+                          <tr>
+                              <td>{period['date']}</td>
+                              <td>{period['amount']:,.2f} {forecast_data['currency']}</td>
+                          </tr>
+                          '''
+                      
+                      tables += f'''
+                          <tr class="total">
+                              <td>Tổng Dự Báo</td>
+                              <td>{forecast_data['total']:,.2f} {forecast_data['currency']}</td>
+                          </tr>
+                          </tbody>
+                      </table>
+                      '''
+              return tables
+
+          def generate_error_section(event):
+              errors = ''
+              error_list = []
+              for output in event:
+                  if output.get('status') != 'success':
+                      error_list.append(output.get('message', 'Lỗi không xác định'))
+              if error_list:
+                  errors = f'''
+                  <div class="error">
+                      <h3>Lỗi Đã Gặp:</h3>
+                      <ul>
+                          {"".join(f'<li>{error}</li>' for error in error_list)}
+                      </ul>
+                  </div>
+                  '''
+              return errors
+
+  SOAStepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowInvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt SOALambdaGetPastCost.Arn
+                  - !GetAtt SOALambdaGetForecast.Arn
+                  - !GetAtt SOALambdaSendHTMLReport.Arn
+
+  SOAStepFunctionDailyUsage:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: SOA-StepFunction-DailyCost
+      RoleArn: !GetAtt SOAStepFunctionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Workflow for daily cost report with parallel execution",
+          "StartAt": "ParallelReports",
+          "States": {
+            "ParallelReports": {
+              "Type": "Parallel",
+              "Next": "SendReport",
+              "Branches": [
+                {
+                  "StartAt": "GetPastCost",
+                  "States": {
+                    "GetPastCost": {
+                      "Type": "Task",
+                      "Resource": "${SOALambdaGetPastCost.Arn}",
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "GetCostForecast",
+                  "States": {
+                    "GetCostForecast": {
+                      "Type": "Task",
+                      "Resource": "${SOALambdaGetForecast.Arn}",
+                      "End": true
+                    }
+                  }
+                }
+              ]
+            },
+            "SendReport": {
+              "Type": "Task",
+              "Resource": "${SOALambdaSendHTMLReport.Arn}",
+              "End": true
+            }
+          }
+        }
+
+  SOAEventBridgeRuleDailyUsage:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: SOA-EventBridge-DailyCost
+      ScheduleExpression: cron(0 0 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !Ref SOAStepFunctionDailyUsage
+          Id: StepFunctionTarget
+          RoleArn: !GetAtt SOAEventBridgeRole.Arn
+
+  SOAEventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowStartExecution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref SOAStepFunctionDailyUsage
+
+Outputs:
+  LambdaGetPastCostArn:
+    Value: !GetAtt SOALambdaGetPastCost.Arn
+    Description: ARN của Lambda Get Past Cost
+
+  LambdaGetForecastArn:
+    Value: !GetAtt SOALambdaGetForecast.Arn
+    Description: ARN của Lambda Get Cost Forecast
+
+  LambdaSendHTMLReportArn:
+    Value: !GetAtt SOALambdaSendHTMLReport.Arn
+    Description: ARN của Lambda Send HTML Report
+
+  StepFunctionArn:
+    Value: !Ref SOAStepFunctionDailyUsage
+    Description: ARN của Step Function
+
+  EventBridgeRuleArn:
+    Value: !GetAtt SOAEventBridgeRuleDailyUsage.Arn
+    Description: ARN của EventBridge Rule
+
+  LambdaExecutionRoleArn:
+    Value: !GetAtt SOALambdaExecutionRole.Arn
+    Description: ARN của IAM Role cho Lambda
+
+  StepFunctionRoleArn:
+    Value: !GetAtt SOAStepFunctionRole.Arn
+    Description: ARN của IAM Role cho Step Function
+
+  EventBridgeRoleArn:
+    Value: !GetAtt SOAEventBridgeRole.Arn
+    Description: ARN của IAM Role cho EventBridge
