@@ -19,14 +19,14 @@ Resources:
       EnableDnsSupport: true
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-VPC'
+          Value: !Sub '${TagPrefix}-Onpre-VPC'
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-IGW'
+          Value: !Sub '${TagPrefix}-Onpre-IGW'
 
   InternetGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -43,7 +43,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-Public-Subnet'
+          Value: !Sub '${TagPrefix}-Onpre-Public-Subnet'
 
   PrivateSubnet:
     Type: AWS::EC2::Subnet
@@ -54,7 +54,7 @@ Resources:
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-Private-Subnet'
+          Value: !Sub '${TagPrefix}-Onpre-Private-Subnet'
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -62,7 +62,7 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-Public-RT'
+          Value: !Sub '${TagPrefix}-Onpre-Public-RT'
 
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
@@ -70,7 +70,7 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-Private-RT'
+          Value: !Sub '${TagPrefix}-Onpre-Private-RT'
 
   PublicRoute:
     Type: AWS::EC2::Route
@@ -102,7 +102,7 @@ Resources:
   PublicSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub '${TagPrefix}-Public-SG'
+      GroupName: !Sub '${TagPrefix}-Onpre-Public-SG'
       GroupDescription: 'Security group for public EC2 instance'
       VpcId: !Ref VPC
       SecurityGroupIngress:
@@ -117,12 +117,12 @@ Resources:
           CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-Public-SG'
+          Value: !Sub '${TagPrefix}-Onpre-Public-SG'
 
   PrivateSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub '${TagPrefix}-Private-SG'
+      GroupName: !Sub '${TagPrefix}-Onpre-Private-SG'
       GroupDescription: 'Security group for private EC2 instance'
       VpcId: !Ref VPC
       SecurityGroupIngress:
@@ -137,12 +137,12 @@ Resources:
           CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-Private-SG'
+          Value: !Sub '${TagPrefix}-Onpre-Private-SG'
 
   EndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub '${TagPrefix}-Endpoint-SG'
+      GroupName: !Sub '${TagPrefix}-Onpre-Endpoint-SG'
       GroupDescription: 'Security group for VPC Endpoints'
       VpcId: !Ref VPC
       SecurityGroupIngress:
@@ -156,7 +156,7 @@ Resources:
           SourceSecurityGroupId: !Ref PublicSecurityGroup
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-Endpoint-SG'
+          Value: !Sub '${TagPrefix}-Onpre-Endpoint-SG'
 
   PublicEC2Instance:
     Type: AWS::EC2::Instance
@@ -181,6 +181,14 @@ Resources:
       SecurityGroupIds:
         - !Ref PrivateSecurityGroup
       IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd.x86_64
+          systemctl start httpd.service
+          systemctl enable httpd.service
+          echo "Hello World from $(hostname -f)" > /var/www/html/index.html
       Tags:
         - Key: Name
           Value: !Sub '${TagPrefix}-Onpre-Private-EC2'
@@ -192,7 +200,7 @@ Resources:
       InstanceId: !Ref PublicEC2Instance
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-Public-EIP'
+          Value: !Sub '${TagPrefix}-Onpre-Public-EIP'
 
   EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -227,7 +235,7 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
       Tags:
         - Key: Name
-          Value: !Sub '${TagPrefix}-EC2-SSM-Role'
+          Value: !Sub '${TagPrefix}-Onpre-EC2-SSM-Role'
 
   SSMEndpoint:
     Type: AWS::EC2::VPCEndpoint
