@@ -1,0 +1,1247 @@
+AWSTemplateFormatVersion: 2010-09-09
+# Xác định phiên bản định dạng của template CloudFormation, ở đây sử dụng phiên bản ngày 09-09-2010.
+
+Description: CloudFront Workshop - API gateway, S3, and Elemental Media Package origin with sample web site.
+# Mô tả mục đích của template: tạo môi trường workshop cho CloudFront với API Gateway, S3, Elemental Media Package làm nguồn gốc, và một trang web mẫu.
+
+Parameters:
+  AssetsBucketName:
+    Type: String
+    Description: 'Name of S3 bucket that contains custom resources and assets'
+    Default: content-acceleration-cloudfront-workshop-aws-asset
+    # Định nghĩa tham số: tên của bucket S3 chứa các tài nguyên tùy chỉnh và tài sản (assets), với giá trị mặc định được cung cấp.
+
+Outputs:
+  originBucket:
+    Value: !Ref OriginBucket
+    Description: 'S3 bucket which contains static website origin'
+    # Đầu ra: tham chiếu đến bucket S3 chứa nội dung gốc của trang web tĩnh.
+  logBucket:
+    Value: !Ref LogBucket
+    Description: 'S3 bucket for storing logs'
+    # Đầu ra: tham chiếu đến bucket S3 dùng để lưu trữ nhật ký (logs).
+  failoverBucket:
+    Value: !Ref FailoverBucket
+    Description: 'failover contents bucket'
+    # Đầu ra: tham chiếu đến bucket S3 chứa nội dung dự phòng (failover).
+  videoOriginDomain:
+    Value: !GetAtt MediaPackageGroup.DomainName
+    Description: 'Media Package URL'
+    # Đầu ra: URL của Media Package, lấy từ thuộc tính DomainName của MediaPackageGroup.
+  apiOriginEndPoint:
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/api/'
+    Description: 'API endpoint'
+    # Đầu ra: điểm cuối (endpoint) của API Gateway, sử dụng cú pháp thay thế để tạo URL động dựa trên ApiGateway và vùng AWS.
+  s3WebsiteDomain:
+    Value: !GetAtt OriginBucket.WebsiteURL
+    Description: 'Static website URL served from S3'
+    # Đầu ra: URL của trang web tĩnh được phục vụ từ bucket S3 OriginBucket.
+  mediaPackageSecretAccessRole:
+    Value: !GetAtt MediaPackageSecretReadRole.Arn
+    Description: Role arn for Media Package to read secret from Secrets Manager
+    # Đầu ra: ARN của vai trò IAM cho phép Media Package đọc bí mật từ Secrets Manager.
+
+Resources:
+  # S3 buckets
+  OriginBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        # Cấu hình bucket S3 để phục vụ trang web tĩnh, với tài liệu gốc mặc định là index.html.
+      PublicAccessBlockConfiguration:
+        BlockPublicPolicy: false
+        # Tắt chặn chính sách công khai, cho phép bucket có chính sách truy cập công khai.
+      Tags:
+        - Key: aws-cdk:auto-delete-objects
+          Value: true
+        # Gắn thẻ để bật tính năng tự động xóa các đối tượng trong bucket khi bucket bị xóa (thường dùng với AWS CDK).
+    DeletionPolicy: Delete
+    # Chính sách xóa: bucket sẽ bị xóa hoàn toàn khi stack CloudFormation bị xóa.
+  VideoBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties: 
+      Tags:
+        - Key: aws-cdk:auto-delete-objects
+          Value: true
+        # Gắn thẻ để bật tính năng tự động xóa các đối tượng trong bucket khi bucket bị xóa.
+    DeletionPolicy: Delete
+    # Chính sách xóa: bucket sẽ bị xóa hoàn toàn khi stack CloudFormation bị xóa.
+  LogBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties: 
+      Tags:
+        - Key: aws-cdk:auto-delete-objects
+          Value: true
+        # Gắn thẻ để bật tính năng tự động xóa các đối tượng trong bucket khi bucket bị xóa.
+    DeletionPolicy: Delete
+    # Chính sách xóa: bucket sẽ bị xóa hoàn toàn khi stack CloudFormation bị xóa.
+  FailoverBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties: 
+      Tags:
+        - Key: aws-cdk:auto-delete-objects
+          Value: true
+        # Gắn thẻ để bật tính năng tự động xóa các đối tượng trong bucket khi bucket bị xóa.
+    DeletionPolicy: Delete
+    # Chính sách xóa: bucket sẽ bị xóa hoàn toàn khi stack CloudFormation bị xóa.
+
+  # S3 bucket policies
+  OriginBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref OriginBucket
+      # Áp dụng chính sách cho bucket OriginBucket.
+      PolicyDocument:
+        Statement:
+          - Action:
+              - 's3:GetObject'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - !GetAtt OriginBucket.Arn
+                - '/*'
+            Principal: '*'
+            # Chính sách: cho phép mọi người (Principal: '*') thực hiện hành động GetObject trên tất cả các đối tượng trong OriginBucket.
+    # Chính sách bucket này cho phép truy cập công khai để lấy các đối tượng từ OriginBucket.
+
+  # Media Packages (role, group, config, asset)
+  MediaPackageRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: 'Allow'
+            Principal: 
+              Service: 'mediapackage.amazonaws.com'
+            # Cho phép dịch vụ Media Package đảm nhận vai trò này.
+        Version: '2012-10-17'
+        # Phiên bản của tài liệu chính sách IAM.
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action: 's3:GetObject'
+                Effect: 'Allow'
+                Resource: 'arn:aws:s3:::*/*'
+                Sid: '0'
+                # Quyền: cho phép lấy các đối tượng từ tất cả các bucket S3.
+              - Action:
+                - 's3:GetBucketRequestPayment'
+                - 's3:ListBucket'
+                - 's3:GetBucketLocation'
+                Effect: 'Allow'
+                Resource: 'arn:aws:s3:::*'
+                Sid: '1'
+                # Quyền: cho phép liệt kê bucket, lấy thông tin thanh toán và vị trí của tất cả các bucket S3.
+            Version: '2012-10-17'
+            # Phiên bản của tài liệu chính sách IAM.
+          PolicyName: 'cmp-soa-iam-s3-access'
+          # Tên của chính sách: cung cấp quyền truy cập S3 cho Media Package.
+    # Vai trò IAM này cho phép Media Package truy cập các tài nguyên S3.
+
+  MediaPackageSecretReadRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: 'Allow'
+            Principal: 
+              Service: 'mediapackage.amazonaws.com'
+            # Cho phép dịch vụ Media Package đảm nhận vai trò này.
+        Version: '2012-10-17'
+        # Phiên bản của tài liệu chính sách IAM.
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                - 'secretsmanager:GetSecretValue'
+                - 'secretsmanager:DescribeSecret'
+                - 'secretsmanager:ListSecrets'
+                - 'secretsmanager:ListSecretVersionIds'
+                Effect: 'Allow'
+                Resource: '*'
+                Sid: '0'
+                # Quyền: cho phép đọc và liệt kê các bí mật từ Secrets Manager.
+              - Action: ['iam:GetRole', 'iam:PassRole']
+                Effect: 'Allow'
+                Resource: '*'
+                Sid: '1'
+                # Quyền: cho phép lấy thông tin vai trò IAM và truyền vai trò.
+            Version: '2012-10-17'
+            # Phiên bản của tài liệu chính sách IAM.
+          PolicyName: 'cmp-soa-iam-secretmanager-access'
+          # Tên của chính sách: cung cấp quyền truy cập Secrets Manager cho Media Package.
+    # Vai trò IAM này cho phép Media Package đọc bí mật từ Secrets Manager.
+
+  MediaPackageGroup:
+    Type: 'AWS::MediaPackage::PackagingGroup'
+    Properties:
+      Id: !Sub '${AWS::StackName}-packaginggroup'
+      # Tạo nhóm đóng gói Media Package với ID dựa trên tên stack.
+    # Nhóm đóng gói này được sử dụng để định nghĩa cách nội dung video được đóng gói.
+
+  MediaPackageConfig:
+    Type: 'AWS::MediaPackage::PackagingConfiguration'
+    Properties:
+      HlsPackage:
+        HlsManifests:
+          - ManifestName: 'index'
+          # Tạo manifest HLS với tên 'index'.
+        SegmentDurationSeconds: 3
+        # Đặt độ dài phân đoạn video là 3 giây.
+      Id: !Sub '${AWS::StackName}-packagingconfiguration'
+      # ID của cấu hình đóng gói, dựa trên tên stack.
+      PackagingGroupId: !Sub '${AWS::StackName}-packaginggroup'
+      # Liên kết cấu hình này với nhóm đóng gói đã tạo.
+    DependsOn: MediaPackageGroup 
+    # Phụ thuộc: cần tạo MediaPackageGroup trước khi tạo cấu hình này.
+    # Cấu hình đóng gói này định nghĩa cách video được phân phối qua HLS.
+
+  MediaPackageAsset:
+    Type: 'AWS::MediaPackage::Asset'
+    Properties:
+      Id: !Sub '${AWS::StackName}-asset'
+      # ID của tài sản Media Package, dựa trên tên stack.
+      PackagingGroupId: !Sub '${AWS::StackName}-packaginggroup'
+      # Liên kết tài sản này với nhóm đóng gói đã tạo.
+      SourceArn: 
+        !Join
+          - ''
+          - - !GetAtt VideoBucket.Arn
+            - '/sample.smil'
+        # ARN của tệp nguồn video (sample.smil) trong VideoBucket.
+      SourceRoleArn: !GetAtt MediaPackageRole.Arn
+      # ARN của vai trò IAM cho phép Media Package truy cập nguồn video.
+    DependsOn: 
+      - MediaPackageRole
+      - MediaPackageConfig
+      - VideoBucketDeploy
+      # Phụ thuộc: cần tạo vai trò, cấu hình và triển khai VideoBucket trước.
+    # Tài sản này đại diện cho video được quản lý bởi Media Package.
+
+  # Lambda functions and roles
+  LambdaRoleEcho:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            # Cho phép dịch vụ Lambda đảm nhận vai trò này.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        # Gắn chính sách quản lý cơ bản của Lambda (cho phép ghi log vào CloudWatch).
+    # Vai trò IAM cho hàm Lambda 'echo'.
+
+  LambdaRoleLogin:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            # Cho phép dịch vụ Lambda đảm nhận vai trò này.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        # Gắn chính sách quản lý cơ bản của Lambda.
+    # Vai trò IAM cho hàm Lambda 'login'.
+
+  LambdaRoleLogout:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            # Cho phép dịch vụ Lambda đảm nhận vai trò này.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        # Gắn chính sách quản lý cơ bản của Lambda.
+    # Vai trò IAM cho hàm Lambda 'logout'.
+
+  LambdaRoleSessionvalue:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            # Cho phép dịch vụ Lambda đảm nhận vai trò này.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        # Gắn chính sách quản lý cơ bản của Lambda.
+    # Vai trò IAM cho hàm Lambda 'sessionvalue'.
+
+  LambdaRoleGetplayurl:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            # Cho phép dịch vụ Lambda đảm nhận vai trò này.
+      Policies:
+        - PolicyName: !Sub '${AWS::StackName}-GetplayurlInlinePolicy'
+          # Tên chính sách nội tuyến, dựa trên tên stack.
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action: ['mediapackage-vod:List*']
+                Effect: 'Allow'
+                Resource: !Sub 'arn:${AWS::Partition}:mediapackage-vod:${AWS::Region}:${AWS::AccountId}:*'
+                # Quyền: cho phép liệt kê các tài nguyên MediaPackage VOD.
+              - Action: ['mediapackage-vod:Describe*']
+                Effect: 'Allow'
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:mediapackage-vod:${AWS::Region}:${AWS::AccountId}:assets/*'
+                  - !Sub 'arn:${AWS::Partition}:mediapackage-vod:${AWS::Region}:${AWS::AccountId}:packaging-configurations/*'
+                  - !Sub 'arn:${AWS::Partition}:mediapackage-vod:${AWS::Region}:${AWS::AccountId}:packaging-groups/*'
+                  # Quyền: cho phép mô tả chi tiết các tài sản, cấu hình và nhóm đóng gói trong MediaPackage VOD.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        # Gắn chính sách quản lý cơ bản của Lambda.
+    # Vai trò IAM cho hàm Lambda 'getplayurl', với quyền đặc biệt cho MediaPackage VOD.
+
+  LambdaRoleGetsignedcookie:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            # Cho phép dịch vụ Lambda đảm nhận vai trò này.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        # Gắn chính sách quản lý cơ bản của Lambda.
+    # Vai trò IAM cho hàm Lambda 'getsignedcookie'.
+
+  LambdaRoleFle:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            # Cho phép dịch vụ Lambda đảm nhận vai trò này.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        # Gắn chính sách quản lý cơ bản của Lambda.
+    # Vai trò IAM cho hàm Lambda 'fle'.
+
+  LambdaRoleTestStaleObject:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            # Cho phép dịch vụ Lambda đảm nhận vai trò này.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        # Gắn chính sách quản lý cơ bản của Lambda.
+    # Vai trò IAM cho hàm Lambda 'teststaleobject'.
+
+  FunctionEcho:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code: 
+        S3Bucket: !Ref AssetsBucketName
+        # Bucket S3 chứa mã nguồn của hàm Lambda.
+        S3Key: function/echo.zip'
+        # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'echo'.
+      Role: !GetAtt LambdaRoleEcho.Arn
+      # ARN của vai trò IAM được gán cho hàm Lambda này.
+      Description: 'returns incoming request object'
+      # Mô tả: hàm trả về đối tượng yêu cầu đến.
+      Handler: 'index.handler'
+      # Hàm xử lý chính trong mã nguồn (index.js, hàm handler).
+      Runtime: 'nodejs20.x'
+      # Môi trường chạy: Node.js phiên bản 20.x.
+    DependsOn:
+      - LambdaRoleEcho
+      # Phụ thuộc: cần tạo vai trò IAM trước khi tạo hàm.
+    # Hàm Lambda này trả về thông tin yêu cầu gửi đến nó.
+
+  FunctionLogin:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Ref AssetsBucketName
+        # Bucket S3 chứa mã nguồn của hàm Lambda.
+        S3Key: function/login.zip'
+        # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'login'.
+      Role: !GetAtt LambdaRoleLogin.Arn
+      # ARN của vai trò IAM được gán cho hàm Lambda này.
+      Environment:
+        Variables:
+          cookieName: 'cmp-soa-cloudfront-lab-SessionId'
+          # Tên cookie được sử dụng để quản lý phiên.
+          userName: 'admin'
+          # Tên người dùng mặc định cho đăng nhập.
+          password: 'testadmin'
+          # Mật khẩu mặc định cho đăng nhập.
+      Description: 'emulates login function'
+      # Mô tả: hàm mô phỏng chức năng đăng nhập.
+      Handler: 'index.handler'
+      # Hàm xử lý chính trong mã nguồn.
+      Runtime: 'nodejs20.x'
+      # Môi trường chạy: Node.js phiên bản 20.x.
+    DependsOn:
+      - LambdaRoleLogin
+      # Phụ thuộc: cần tạo vai trò IAM trước khi tạo hàm.
+    # Hàm Lambda này mô phỏng quá trình đăng nhập với thông tin xác thực cố định.
+
+  FunctionLogout:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Ref AssetsBucketName
+        # Bucket S3 chứa mã nguồn của hàm Lambda.
+        S3Key: function/logout.zip'
+        # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'logout'.
+      Role: !GetAtt LambdaRoleLogout.Arn
+      # ARN của vai trò IAM được gán cho hàm Lambda này.
+      Description: 'emluates logout (remove cookie)'
+      # Mô tả: hàm mô phỏng đăng xuất bằng cách xóa cookie.
+      Handler: 'index.handler'
+      # Hàm xử lý chính trong mã nguồn.
+      Runtime: 'nodejs20.x'
+      # Môi trường chạy: Node.js phiên bản 20.x.
+    DependsOn:
+      - LambdaRoleLogout
+      # Phụ thuộc: cần tạo vai trò IAM trước khi tạo hàm.
+    # Hàm Lambda này mô phỏng đăng xuất bằng cách xóa cookie phiên.
+
+  FunctionSessionvalue:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Ref AssetsBucketName
+        # Bucket S3 chứa mã nguồn của hàm Lambda.
+        S3Key: function/sessionvalue.zip'
+        # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'sessionvalue'.
+      Role: !GetAtt LambdaRoleSessionvalue.Arn
+      # ARN của vai trò IAM được gán cho hàm Lambda này.
+      Environment:
+        Variables:
+          cookieName: 'cmp-soa-cloudfront-lab-SessionId'
+          # Tên cookie được sử dụng để quản lý phiên.
+      Description: 'return session ID or anonymous session'
+      # Mô tả: hàm trả về ID phiên hoặc phiên ẩn danh nếu không có phiên.
+      Handler: 'index.handler'
+      # Hàm xử lý chính trong mã nguồn.
+      Runtime: 'nodejs20.x'
+      # Môi trường chạy: Node.js phiên bản 20.x.
+    DependsOn:
+      - LambdaRoleSessionvalue
+      # Phụ thuộc: cần tạo vai trò IAM trước khi tạo hàm.
+    UpdateReplacePolicy: 'Delete'
+    # Chính sách cập nhật: xóa hàm khi cập nhật stack.
+    DeletionPolicy: 'Delete'
+    # Chính sách xóa: xóa hàm khi stack bị xóa.
+    # Hàm Lambda này quản lý và trả về thông tin phiên.
+
+  FunctionGetplayurl:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Ref AssetsBucketName
+        # Bucket S3 chứa mã nguồn của hàm Lambda.
+        S3Key: function/getplayurl.zip'
+        # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'getplayurl'.
+      Role: !GetAtt LambdaRoleGetplayurl.Arn
+      # ARN của vai trò IAM được gán cho hàm Lambda này.
+      Environment:
+        Variables:
+          assetId: !Sub '${AWS::StackName}-asset'
+          # ID của tài sản Media Package, dựa trên tên stack.
+      Description: 'read the play url of mediapackage VOD'
+      # Mô tả: hàm đọc URL phát của MediaPackage VOD.
+      Handler: 'index.handler'
+      # Hàm xử lý chính trong mã nguồn.
+      Runtime: 'nodejs20.x'
+      # Môi trường chạy: Node.js phiên bản 20.x.
+      Timeout: 60
+      # Thời gian chờ tối đa: 60 giây.
+    DependsOn:
+      - LambdaRoleGetplayurl
+      # Phụ thuộc: cần tạo vai trò IAM trước khi tạo hàm.
+    UpdateReplacePolicy: 'Delete'
+    # Chính sách cập nhật: xóa hàm khi cập nhật stack.
+    DeletionPolicy: 'Delete'
+    # Chính sách xóa: xóa hàm khi stack bị xóa.
+    # Hàm Lambda này lấy URL phát video từ MediaPackage VOD.
+
+  FunctionGetsignedcookie:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Ref AssetsBucketName
+        # Bucket S3 chứa mã nguồn của hàm Lambda.
+        S3Key: function/getsignedcookie.zip'
+        # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'getsignedcookie'.
+      Role: !GetAtt LambdaRoleGetsignedcookie.Arn
+      # ARN của vai trò IAM được gán cho hàm Lambda này.
+      Environment:
+        Variables:
+          cloudFrontKeypairId: '<put your keypair id>'
+          # ID của cặp khóa CloudFront (cần thay bằng giá trị thực).
+          cloudFrontPrivateKey: '<put your private key text>'
+          # Khóa riêng của CloudFront (cần thay bằng giá trị thực).
+          sessionDuration: '86400'
+          # Thời gian phiên: 86400 giây (24 giờ).
+          websiteDomain: '<put your CloudFront domain name>'
+          # Tên miền CloudFront (cần thay bằng giá trị thực).
+      Description: 'sets cookie for CloudFront private content'
+      # Mô tả: hàm thiết lập cookie cho nội dung riêng tư của CloudFront.
+      Handler: 'index.handler'
+      # Hàm xử lý chính trong mã nguồn.
+      Runtime: 'nodejs20.x'
+      # Môi trường chạy: Node.js phiên bản 20.x.
+    DependsOn:
+      - LambdaRoleGetsignedcookie
+      # Phụ thuộc: cần tạo vai trò IAM trước khi tạo hàm.
+    UpdateReplacePolicy: 'Delete'
+    # Chính sách cập nhật: xóa hàm khi cập nhật stack.
+    DeletionPolicy: 'Delete'
+    # Chính sách xóa: xóa hàm khi stack bị xóa.
+    # Hàm Lambda này tạo cookie ký để truy cập nội dung riêng tư của CloudFront.
+
+  FunctionFle:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Ref AssetsBucketName
+        # Bucket S3 chứa mã nguồn của hàm Lambda.
+        S3Key: function/fle.zip'
+        # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'fle'.
+      Role: !GetAtt LambdaRoleFle.Arn
+      # ARN của vai trò IAM được gán cho hàm Lambda này.
+      Description: 'shows incoming POST body as it is'
+      # Mô tả: hàm hiển thị nội dung POST gửi đến như nguyên bản.
+      Handler: 'index.handler'
+      # Hàm xử lý chính trong mã nguồn.
+      Runtime: 'nodejs20.x'
+      # Môi trường chạy: Node.js phiên bản 20.x.
+    DependsOn:
+      - LambdaRoleFle
+      # Phụ thuộc: cần tạo vai trò IAM trước khi tạo hàm.
+    UpdateReplacePolicy: 'Delete'
+    # Chính sách cập nhật: xóa hàm khi cập nhật stack.
+    DeletionPolicy: 'Delete'
+    # Chính sách xóa: xóa hàm khi stack bị xóa.
+    # Hàm Lambda này phản hồi lại nội dung POST nhận được.
+
+  FunctionTestStaleObject:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Ref AssetsBucketName
+        # Bucket S3 chứa mã nguồn của hàm Lambda.
+        S3Key: function/teststaleobject.zip'
+        # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'teststaleobject'.
+      Role: !GetAtt LambdaRoleTestStaleObject.Arn
+      # ARN của vai trò IAM được gán cho hàm Lambda này.
+      Environment:
+        Variables:
+          statusCode: '200'
+          # Mã trạng thái mặc định: 200 OK.
+      Description: 'returns 200 OK or 5xx error based on the env variable'
+      # Mô tả: hàm trả về mã trạng thái 200 OK hoặc lỗi 5xx dựa trên biến môi trường.
+      Handler: 'index.handler'
+      # Hàm xử lý chính trong mã nguồn.
+      Runtime: 'nodejs20.x'
+      # Môi trường chạy: Node.js phiên bản 20.x.
+    DependsOn:
+      - LambdaRoleTestStaleObject
+      # Phụ thuộc: cần tạo vai trò IAM trước khi tạo hàm.
+    # Hàm Lambda này dùng để kiểm tra phản hồi trạng thái.
+
+  # API Gateway
+  ApiGateway:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Description: 'API endpoint for function calls'
+      # Mô tả: API Gateway cung cấp điểm cuối cho các cuộc gọi hàm.
+      Name: !Sub '${AWS::StackName}-OriginAPI'
+      # Tên của API, dựa trên tên stack.
+      EndpointConfiguration:
+        Types: ['REGIONAL']
+        # Cấu hình điểm cuối: sử dụng loại khu vực (regional).
+    # Tạo REST API Gateway để tích hợp với các hàm Lambda.
+
+  ApiDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    Properties:
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway cần triển khai.
+    DependsOn:
+      - ApiGateway
+      - ApiMethodEchoGET
+      - ApiMethodLoginPOST
+      - ApiMethodLogoutGET
+      - ApiMethodSessionvalueGET
+      - ApiMethodGetplayurlGET
+      # Phụ thuộc: cần tạo API Gateway và các phương thức trước khi triển khai.
+    UpdateReplacePolicy: 'Delete'
+    # Chính sách cập nhật: xóa triển khai khi cập nhật stack.
+    DeletionPolicy: 'Delete'
+    # Chính sách xóa: xóa triển khai khi stack bị xóa.
+    # Triển khai API Gateway để kích hoạt các phương thức API.
+
+  ApiDeploymentStageApi:
+    Type: 'AWS::ApiGateway::Stage'
+    Properties:
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway liên kết với giai đoạn này.
+      DeploymentId: !Ref ApiDeployment
+      # ID của triển khai được áp dụng cho giai đoạn này.
+      StageName: 'api'
+      # Tên giai đoạn: 'api'.
+    # Tạo giai đoạn 'api' cho triển khai API Gateway.
+
+  # API resource and method
+  ApiResourceEcho:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      # ID của tài nguyên gốc (root) của API Gateway.
+      PathPart: 'echo'
+      # Phần đường dẫn: '/echo'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway mà tài nguyên này thuộc về.
+    # Tạo tài nguyên API cho đường dẫn '/echo'.
+
+  ApiMethodEchoGET:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: 'GET'
+      # Phương thức HTTP: GET.
+      ResourceId: !Ref ApiResourceEcho
+      # ID của tài nguyên '/echo'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway.
+      AuthorizationType: 'NONE'
+      # Không yêu cầu xác thực.
+      Integration:
+        IntegrationHttpMethod: 'POST'
+        # Phương thức tích hợp: POST (dùng với Lambda proxy).
+        Type: 'AWS_PROXY'
+        # Loại tích hợp: proxy với AWS Lambda.
+        Uri: !Join
+          - ''
+          - - !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/'
+            - !GetAtt FunctionEcho.Arn
+            - '/invocations'
+          # URI tích hợp: ARN của hàm Lambda 'echo' để gọi khi nhận yêu cầu GET.
+    # Phương thức GET cho '/echo', tích hợp với hàm Lambda 'echo'.
+
+  ApiResourceLogin:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      # ID của tài nguyên gốc (root) của API Gateway.
+      PathPart: 'login'
+      # Phần đường dẫn: '/login'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway mà tài nguyên này thuộc về.
+    # Tạo tài nguyên API cho đường dẫn '/login'.
+
+  ApiMethodLoginPOST:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: 'POST'
+      # Phương thức HTTP: POST.
+      ResourceId: !Ref ApiResourceLogin
+      # ID của tài nguyên '/login'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway.
+      AuthorizationType: 'NONE'
+      # Không yêu cầu xác thực.
+      Integration:
+        IntegrationHttpMethod: 'POST'
+        # Phương thức tích hợp: POST.
+        Type: 'AWS_PROXY'
+        # Loại tích hợp: proxy với AWS Lambda.
+        Uri: !Join
+          - ''
+          - - !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/'
+            - !GetAtt FunctionLogin.Arn
+            - '/invocations'
+          # URI tích hợp: ARN của hàm Lambda 'login' để gọi khi nhận yêu cầu POST.
+    # Phương thức POST cho '/login', tích hợp với hàm Lambda 'login'.
+
+  ApiResourceLogout:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      # ID của tài nguyên gốc (root) của API Gateway.
+      PathPart: 'logout'
+      # Phần đường dẫn: '/logout'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway mà tài nguyên này thuộc về.
+    # Tạo tài nguyên API cho đường dẫn '/logout'.
+
+  ApiMethodLogoutGET:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: 'GET'
+      # Phương thức HTTP: GET.
+      ResourceId: !Ref ApiResourceLogout
+      # ID của tài nguyên '/logout'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway.
+      AuthorizationType: 'NONE'
+      # Không yêu cầu xác thực.
+      Integration:
+        IntegrationHttpMethod: 'POST'
+        # Phương thức tích hợp: POST (dùng với Lambda proxy).
+        Type: 'AWS_PROXY'
+        # Loại tích hợp: proxy với AWS Lambda.
+        Uri: !Join
+          - ''
+          - - !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/'
+            - !GetAtt FunctionLogout.Arn
+            - '/invocations'
+          # URI tích hợp: ARN của hàm Lambda 'logout' để gọi khi nhận yêu cầu GET.
+    # Phương thức GET cho '/logout', tích hợp với hàm Lambda 'logout'.
+
+  ApiResourceSessionvalue:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      # ID của tài nguyên gốc (root) của API Gateway.
+      PathPart: 'sessionvalue'
+      # Phần đường dẫn: '/sessionvalue'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway mà tài nguyên này thuộc về.
+    # Tạo tài nguyên API cho đường dẫn '/sessionvalue'.
+
+  ApiMethodSessionvalueGET:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: 'GET'
+      # Phương thức HTTP: GET.
+      ResourceId: !Ref ApiResourceSessionvalue
+      # ID của tài nguyên '/sessionvalue'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway.
+      AuthorizationType: 'NONE'
+      # Không yêu cầu xác thực.
+      Integration:
+        IntegrationHttpMethod: 'POST'
+        # Phương thức tích hợp: POST (dùng với Lambda proxy).
+        Type: 'AWS_PROXY'
+        # Loại tích hợp: proxy với AWS Lambda.
+        Uri: !Join
+          - ''
+          - - !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/'
+            - !GetAtt FunctionSessionvalue.Arn
+            - '/invocations'
+          # URI tích hợp: ARN của hàm Lambda 'sessionvalue' để gọi khi nhận yêu cầu GET.
+    # Phương thức GET cho '/sessionvalue', tích hợp với hàm Lambda 'sessionvalue'.
+
+  ApiResourceGetplayurl:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      # ID của tài nguyên gốc (root) của API Gateway.
+      PathPart: 'getplayurl'
+      # Phần đường dẫn: '/getplayurl'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway mà tài nguyên này thuộc về.
+    # Tạo tài nguyên API cho đường dẫn '/getplayurl'.
+
+  ApiMethodGetplayurlGET:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: 'GET'
+      # Phương thức HTTP: GET.
+      ResourceId: !Ref ApiResourceGetplayurl
+      # ID của tài nguyên '/getplayurl'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway.
+      AuthorizationType: 'NONE'
+      # Không yêu cầu xác thực.
+      Integration:
+        IntegrationHttpMethod: 'POST'
+        # Phương thức tích hợp: POST (dùng với Lambda proxy).
+        Type: 'AWS_PROXY'
+        # Loại tích hợp: proxy với AWS Lambda.
+        Uri: !Join
+          - ''
+          - - !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/'
+            - !GetAtt FunctionGetplayurl.Arn
+            - '/invocations'
+          # URI tích hợp: ARN của hàm Lambda 'getplayurl' để gọi khi nhận yêu cầu GET.
+    # Phương thức GET cho '/getplayurl', tích hợp với hàm Lambda 'getplayurl'.
+
+  ApiResourceGetsignedcookie:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      # ID của tài nguyên gốc (root) của API Gateway.
+      PathPart: 'getsignedcookie'
+      # Phần đường dẫn: '/getsignedcookie'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway mà tài nguyên này thuộc về.
+    # Tạo tài nguyên API cho đường dẫn '/getsignedcookie'.
+
+  ApiMethodGetsignedcookieGET:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: 'GET'
+      # Phương thức HTTP: GET.
+      ResourceId: !Ref ApiResourceGetsignedcookie
+      # ID của tài nguyên '/getsignedcookie'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway.
+      AuthorizationType: 'NONE'
+      # Không yêu cầu xác thực.
+      Integration:
+        IntegrationHttpMethod: 'POST'
+        # Phương thức tích hợp: POST (dùng với Lambda proxy).
+        Type: 'AWS_PROXY'
+        # Loại tích hợp: proxy với AWS Lambda.
+        Uri: !Join
+          - ''
+          - - !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/'
+            - !GetAtt FunctionGetsignedcookie.Arn
+            - '/invocations'
+          # URI tích hợp: ARN của hàm Lambda 'getsignedcookie' để gọi khi nhận yêu cầu GET.
+    # Phương thức GET cho '/getsignedcookie', tích hợp với hàm Lambda 'getsignedcookie'.
+
+  ApiResourceFle:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      # ID của tài nguyên gốc (root) của API Gateway.
+      PathPart: 'fle'
+      # Phần đường dẫn: '/fle'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway mà tài nguyên này thuộc về.
+    # Tạo tài nguyên API cho đường dẫn '/fle'.
+
+  ApiMethodFlePOST:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: 'POST'
+      # Phương thức HTTP: POST.
+      ResourceId: !Ref ApiResourceFle
+      # ID của tài nguyên '/fle'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway.
+      AuthorizationType: 'NONE'
+      # Không yêu cầu xác thực.
+      Integration:
+        IntegrationHttpMethod: 'POST'
+        # Phương thức tích hợp: POST.
+        Type: 'AWS_PROXY'
+        # Loại tích hợp: proxy với AWS Lambda.
+        Uri: !Join
+          - ''
+          - - !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/'
+            - !GetAtt FunctionFle.Arn
+            - '/invocations'
+          # URI tích hợp: ARN của hàm Lambda 'fle' để gọi khi nhận yêu cầu POST.
+    # Phương thức POST cho '/fle', tích hợp với hàm Lambda 'fle'.
+
+  ApiResourceTeststaleobject:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      # ID của tài nguyên gốc (root) của API Gateway.
+      PathPart: 'teststaleobject'
+      # Phần đường dẫn: '/teststaleobject'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway mà tài nguyên này thuộc về.
+    # Tạo tài nguyên API cho đường dẫn '/teststaleobject'.
+
+  ApiMethodTeststaleobjectGET:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: 'GET'
+      # Phương thức HTTP: GET.
+      ResourceId: !Ref ApiResourceTeststaleobject
+      # ID của tài nguyên '/teststaleobject'.
+      RestApiId: !Ref ApiGateway
+      # ID của API Gateway.
+      AuthorizationType: 'NONE'
+      # Không yêu cầu xác thực.
+      Integration:
+        IntegrationHttpMethod: 'POST'
+        # Phương thức tích hợp: POST (dùng với Lambda proxy).
+        Type: 'AWS_PROXY'
+        # Loại tích hợp: proxy với AWS Lambda.
+        Uri: !Join
+          - ''
+          - - !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/'
+            - !GetAtt FunctionTestStaleObject.Arn
+            - '/invocations'
+          # URI tích hợp: ARN của hàm Lambda 'teststaleobject' để gọi khi nhận yêu cầu GET.
+    # Phương thức GET cho '/teststaleobject', tích hợp với hàm Lambda 'teststaleobject'.
+
+  # Lambda Permission for API
+  EchoApiPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      # Hành động: cho phép gọi hàm Lambda.
+      FunctionName: !GetAtt FunctionEcho.Arn
+      # ARN của hàm Lambda 'echo'.
+      Principal: 'apigateway.amazonaws.com'
+      # Đối tượng được phép: API Gateway.
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/echo'
+      # ARN nguồn: giới hạn quyền cho các yêu cầu từ '/echo' trên API Gateway.
+    # Quyền này cho phép API Gateway gọi hàm Lambda 'echo'.
+
+  LoginApiPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      # Hành động: cho phép gọi hàm Lambda.
+      FunctionName: !GetAtt FunctionLogin.Arn
+      # ARN của hàm Lambda 'login'.
+      Principal: 'apigateway.amazonaws.com'
+      # Đối tượng được phép: API Gateway.
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/login'
+      # ARN nguồn: giới hạn quyền cho các yêu cầu từ '/login' trên API Gateway.
+    # Quyền này cho phép API Gateway gọi hàm Lambda 'login'.
+
+  LogoutApiPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      # Hành động: cho phép gọi hàm Lambda.
+      FunctionName: !GetAtt FunctionLogout.Arn
+      # ARN của hàm Lambda 'logout'.
+      Principal: 'apigateway.amazonaws.com'
+      # Đối tượng được phép: API Gateway.
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/logout'
+      # ARN nguồn: giới hạn quyền cho các yêu cầu từ '/logout' trên API Gateway.
+    # Quyền này cho phép API Gateway gọi hàm Lambda 'logout'.
+
+  SessionvalueApiPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      # Hành động: cho phép gọi hàm Lambda.
+      FunctionName: !GetAtt FunctionSessionvalue.Arn
+      # ARN của hàm Lambda 'sessionvalue'.
+      Principal: 'apigateway.amazonaws.com'
+      # Đối tượng được phép: API Gateway.
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/sessionvalue'
+      # ARN nguồn: giới hạn quyền cho các yêu cầu từ '/sessionvalue' trên API Gateway.
+    # Quyền này cho phép API Gateway gọi hàm Lambda 'sessionvalue'.
+
+  GetplayurlApiPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      # Hành động: cho phép gọi hàm Lambda.
+      FunctionName: !GetAtt FunctionGetplayurl.Arn
+      # ARN của hàm Lambda 'getplayurl'.
+      Principal: 'apigateway.amazonaws.com'
+      # Đối tượng được phép: API Gateway.
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/GET/getplayurl'
+      # ARN nguồn: giới hạn quyền cho các yêu cầu GET từ '/getplayurl' trên API Gateway.
+    # Quyền này cho phép API Gateway gọi hàm Lambda 'getplayurl'.
+
+  GetsignedcookieApiPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      # Hành động: cho phép gọi hàm Lambda.
+      FunctionName: !GetAtt FunctionGetsignedcookie.Arn
+      # ARN của hàm Lambda 'getsignedcookie'.
+      Principal: 'apigateway.amazonaws.com'
+      # Đối tượng được phép: API Gateway.
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/GET/getsignedcookie'
+      # ARN nguồn: giới hạn quyền cho các yêu cầu GET từ '/getsignedcookie' trên API Gateway.
+    # Quyền này cho phép API Gateway gọi hàm Lambda 'getsignedcookie'.
+
+  FleApiPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      # Hành động: cho phép gọi hàm Lambda.
+      FunctionName: !GetAtt FunctionFle.Arn
+      # ARN của hàm Lambda 'fle'.
+      Principal: 'apigateway.amazonaws.com'
+      # Đối tượng được phép: API Gateway.
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/POST/fle'
+      # ARN nguồn: giới hạn quyền cho các yêu cầu POST từ '/fle' trên API Gateway.
+    # Quyền này cho phép API Gateway gọi hàm Lambda 'fle'.
+
+  TeststaleobjectApiPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      # Hành động: cho phép gọi hàm Lambda.
+      FunctionName: !GetAtt FunctionTestStaleObject.Arn
+      # ARN của hàm Lambda 'teststaleobject'.
+      Principal: 'apigateway.amazonaws.com'
+      # Đối tượng được phép: API Gateway.
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/GET/teststaleobject'
+      # ARN nguồn: giới hạn quyền cho các yêu cầu GET từ '/teststaleobject' trên API Gateway.
+    # Quyền này cho phép API Gateway gọi hàm Lambda 'teststaleobject'.
+
+  # Custom resource IAM role
+  S3BucketCustomResourceLambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            # Cho phép dịch vụ Lambda đảm nhận vai trò này.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        # Gắn chính sách quản lý cơ bản của Lambda.
+      Policies:
+        - PolicyName: !Sub '${AWS::StackName}-CustomResourceInlinePolicy'
+          # Tên chính sách nội tuyến, dựa trên tên stack.
+          PolicyDocument:
+            Statement:
+              - Action: ['s3:GetObject*', 's3:GetBucket*', 's3:List*']
+                Effect: 'Allow'
+                Resource: 
+                  - !Sub 'arn:${AWS::Partition}:s3:::${AssetsBucketName}'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${AssetsBucketName}/*'
+                # Quyền: cho phép đọc và liệt kê từ AssetsBucketName.
+              - Action: ['s3:GetObject*', 's3:GetBucket*', 's3:List*', 's3:DeleteObject*', 's3:PutObject*', 's3:Abort*']
+                Effect: 'Allow'
+                Resource: 
+                  - !Sub 'arn:${AWS::Partition}:s3:::${OriginBucket}'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${VideoBucket}'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FailoverBucket}'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${LogBucket}'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${OriginBucket}/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${VideoBucket}/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FailoverBucket}/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${LogBucket}/*'
+                # Quyền: cho phép đọc, ghi, xóa và quản lý trên các bucket Origin, Video, Failover và Log.
+    # Vai trò IAM này dùng cho các hàm Lambda tùy chỉnh để quản lý tài nguyên S3.
+
+  # Custom resource S3 auto delete
+  S3BucketAutoDeleteFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Ref AssetsBucketName
+        # Bucket S3 chứa mã nguồn của hàm Lambda.
+        S3Key: autodeletefunction-new.zip'
+        # Đường dẫn đến tệp zip chứa mã nguồn của hàm tự động xóa.
+      Timeout: 900
+      # Thời gian chờ tối đa: 900 giây (15 phút).
+      MemorySize: 128
+      # Dung lượng bộ nhớ: 128 MB.
+      Handler: 'index.handler'
+      # Hàm xử lý chính trong mã nguồn.
+      Runtime: 'nodejs16.x'
+      # Môi trường chạy: Node.js phiên bản 16.x.
+      Role: !GetAtt S3BucketCustomResourceLambdaExecutionRole.Arn
+      # ARN của vai trò IAM được gán cho hàm Lambda này.
+    DependsOn:
+      - S3BucketCustomResourceLambdaExecutionRole
+      # Phụ thuộc: cần tạo vai trò IAM trước khi tạo hàm.
+    # Hàm Lambda này tự động xóa các đối tượng trong bucket S3 khi bucket bị xóa.
+
+  OriginBucketAutoDelete:
+    Type: 'Custom::S3AutoDeleteObjects'
+    Properties:
+      ServiceToken:
+        !GetAtt S3BucketAutoDeleteFunction.Arn
+        # ARN của hàm Lambda thực thi tài nguyên tùy chỉnh này.
+      BucketName: !Ref OriginBucket
+      # Tên bucket cần tự động xóa các đối tượng: OriginBucket.
+    DependsOn: OriginBucket
+    # Phụ thuộc: cần tạo OriginBucket trước.
+    UpdateReplacePolicy: 'Delete'
+    # Chính sách cập nhật: xóa tài nguyên khi cập nhật stack.
+    DeletionPolicy: 'Delete'
+    # Chính sách xóa: xóa tài nguyên khi stack bị xóa.
+    # Tài nguyên tùy chỉnh này đảm bảo các đối tượng trong OriginBucket được xóa tự động.
+
+  VideoBucketAutoDelete:
+    Type: 'Custom::S3AutoDeleteObjects'
+    Properties:
+      ServiceToken:
+        !GetAtt S3BucketAutoDeleteFunction.Arn
+        # ARN của hàm Lambda thực thi tài nguyên tùy chỉnh này.
+      BucketName: !Ref VideoBucket
+      # Tên bucket cần tự động xóa các đối tượng: VideoBucket.
+    DependsOn: VideoBucket
+    # Phụ thuộc: cần tạo VideoBucket trước.
+    UpdateReplacePolicy: 'Delete'
+    # Chính sách cập nhật: xóa tài nguyên khi cập nhật stack.
+    DeletionPolicy: 'Delete'
+    # Chính sách xóa: xóa tài nguyên khi stack bị xóa.
+    # Tài nguyên tùy chỉnh này đảm bảo các đối tượng trong VideoBucket được xóa tự động.
+
+  LogBucketAutoDelete:
+    Type: 'Custom::S3AutoDeleteObjects'
+    Properties:
+      ServiceToken:
+        !GetAtt S3BucketAutoDeleteFunction.Arn
+        # ARN của hàm Lambda thực thi tài nguyên tùy chỉnh này.
+      BucketName: !Ref LogBucket
+      # Tên bucket cần tự động xóa các đối tượng: LogBucket.
+    DependsOn: LogBucket
+    # Phụ thuộc: cần tạo LogBucket trước.
+    UpdateReplacePolicy: 'Delete'
+    # Chính sách cập nhật: xóa tài nguyên khi cập nhật stack.
+    DeletionPolicy: 'Delete'
+    # Chính sách xóa: xóa tài nguyên khi stack bị xóa.
+    # Tài nguyên tùy chỉnh này đảm bảo các đối tượng trong LogBucket được xóa tự động.
+
+  FailoverBucketAutoDelete:
+    Type: 'Custom::S3AutoDeleteObjects'
+    Properties:
+      ServiceToken:
+        !GetAtt S3BucketAutoDeleteFunction.Arn
+        # ARN của hàm Lambda thực thi tài nguyên tùy chỉnh này.
+      BucketName: !Ref FailoverBucket
+      # Tên bucket cần tự động xóa các đối tượng: FailoverBucket.
+    DependsOn: FailoverBucket
+    # Phụ thuộc: cần tạo FailoverBucket trước.
+    UpdateReplacePolicy: 'Delete'
+    # Chính sách cập nhật: xóa tài nguyên khi cập nhật stack.
+    DeletionPolicy: 'Delete'
+    # Chính sách xóa: xóa tài nguyên khi stack bị xóa.
+    # Tài nguyên tùy chỉnh này đảm bảo các đối tượng trong FailoverBucket được xóa tự động.
+
+  # Custom resource to Deploy files to S3
+  S3BucketDeployFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Ref AssetsBucketName
+        # Bucket S3 chứa mã nguồn của hàm Lambda.
+        S3Key: filedeployfunction-new.zip'
+        # Đường dẫn đến tệp zip chứa mã nguồn của hàm triển khai tệp.
+      Environment:
+        Variables:
+          AWS_CA_BUNDLE: "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+          # Biến môi trường: đường dẫn đến chứng chỉ CA cho AWS CLI.
+      Timeout: 900
+      # Thời gian chờ tối đa: 900 giây (15 phút).
+      MemorySize: 256
+      # Dung lượng bộ nhớ: 256 MB.
+      Handler: 'index.handler'
+      # Hàm xử lý chính trong mã nguồn.
+      Runtime: 'python3.9'
+      # Môi trường chạy: Python phiên bản 3.9.
+      Role: !GetAtt S3BucketCustomResourceLambdaExecutionRole.Arn
+      # ARN của vai trò IAM được gán cho hàm Lambda này.
+      Layers:
+        - !Ref S3BucketDeployAWSCLILayer
+        # Layer: tham chiếu đến layer chứa AWS CLI.
+    DependsOn:
+      - S3BucketCustomResourceLambdaExecutionRole
+      # Phụ thuộc: cần tạo vai trò IAM trước khi tạo hàm.
+    # Hàm Lambda này triển khai tệp từ bucket nguồn sang bucket đích trong S3.
+
+  S3BucketDeployAWSCLILayer:
+    Type: 'AWS::Lambda::LayerVersion'
+    Properties:
+      Content:
+        S3Bucket: !Ref AssetsBucketName
+        # Bucket S3 chứa nội dung của layer.
+        S3Key: awsclilayer-new.zip'
+        # Đường dẫn đến tệp zip chứa AWS CLI cho layer.
+      Description: 'This layer is used in S3 Bucket Deploy Function'
+      # Mô tả: layer này được sử dụng trong hàm triển khai S3.
+    # Layer này cung cấp AWS CLI cho hàm Lambda triển khai tệp.
+
+  OriginBucketDeploy:
+    Type: 'Custom::S3BucketDeployment'
+    Properties:
+      ServiceToken: !GetAtt S3BucketDeployFunction.Arn
+      # ARN của hàm Lambda thực thi tài nguyên tùy chỉnh này.
+      SourceBucketNames:
+        - !Ref AssetsBucketName
+        # Bucket nguồn: AssetsBucketName.
+      SourceObjectKeys:
+        - demosite.zip'
+        # Khóa đối tượng nguồn: tệp demosite.zip trong AssetsBucket.
+      DestinationBucketName: !Ref OriginBucket
+      # Bucket đích: OriginBucket.
+      Prune: true
+      # Xóa các đối tượng cũ trong bucket đích không có trong nguồn.
+    UpdateReplacePolicy: 'Delete'
+    # Chính sách cập nhật: xóa tài nguyên khi cập nhật stack.
+    DeletionPolicy: 'Delete'
+    # Chính sách xóa: xóa tài nguyên khi stack bị xóa.
+    # Tài nguyên tùy chỉnh này triển khai trang web mẫu từ AssetsBucket sang OriginBucket.
+
+  VideoBucketDeploy:
+    Type: 'Custom::S3BucketDeployment'
+    Properties:
+      ServiceToken: !GetAtt S3BucketDeployFunction.Arn
+      # ARN của hàm Lambda thực thi tài nguyên tùy chỉnh này.
+      SourceBucketNames:
+        - !Ref AssetsBucketName
+        # Bucket nguồn: AssetsBucketName.
+      SourceObjectKeys:
+        - demovideo.zip'
+        # Khóa đối tượng nguồn: tệp demovideo.zip trong AssetsBucket.
+      DestinationBucketName: !Ref VideoBucket
+      # Bucket đích: VideoBucket.
+      Prune: true
+      # Xóa các đối tượng cũ trong bucket đích không có trong nguồn.
+    UpdateReplacePolicy: 'Delete'
+    # Chính sách cập nhật: xóa tài nguyên khi cập nhật stack.
+    DeletionPolicy: 'Delete'
+    # Chính sách xóa: xóa tài nguyên khi stack bị xóa.
+    # Tài nguyên tùy chỉnh này triển khai video mẫu từ AssetsBucket sang VideoBucket.
+
+  FailoverBucketDeploy:
+    Type: 'Custom::S3BucketDeployment'
+    Properties:
+      ServiceToken: !GetAtt S3BucketDeployFunction.Arn
+      # ARN của hàm Lambda thực thi tài nguyên tùy chỉnh này.
+      SourceBucketNames:
+        - !Ref AssetsBucketName
+        # Bucket nguồn: AssetsBucketName.
+      SourceObjectKeys:
+        - demosite.zip'
+        # Khóa đối tượng nguồn: tệp demosite.zip trong AssetsBucket.
+      DestinationBucketName: !Ref FailoverBucket
+      # Bucket đích: FailoverBucket.
+      Prune: true
+      # Xóa các đối tượng cũ trong bucket đích không có trong nguồn.
+    UpdateReplacePolicy: 'Delete'
+    # Chính sách cập nhật: xóa tài nguyên khi cập nhật stack.
+    DeletionPolicy: 'Delete'
+    # Chính sách xóa: xóa tài nguyên khi stack bị xóa.
+    # Tài nguyên tùy chỉnh này triển khai trang web dự phòng từ AssetsBucket sang FailoverBucket.
