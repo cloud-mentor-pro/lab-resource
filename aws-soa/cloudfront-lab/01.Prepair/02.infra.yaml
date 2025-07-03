@@ -8,7 +8,7 @@ Parameters:
   AssetsBucketName:
     Type: String
     Description: 'Name of S3 bucket that contains custom resources and assets'
-    Default: content-acceleration-cloudfront-workshop-aws-asset
+    Default: soa-s3-bucket-cloudfront-lab-longmentor-2025-7-3
     # Định nghĩa tham số: tên của bucket S3 chứa các tài nguyên tùy chỉnh và tài sản (assets), với giá trị mặc định được cung cấp.
 
 Outputs:

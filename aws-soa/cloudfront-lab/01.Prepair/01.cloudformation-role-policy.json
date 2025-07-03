@@ -1,0 +1,84 @@
+{
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Effect": "Allow",
+			"Action": [
+				"s3:*"
+			],
+			"Resource": [
+				"arn:aws:s3:::originbucket-*",
+				"arn:aws:s3:::videobucket-*",
+				"arn:aws:s3:::logbucket-*",
+				"arn:aws:s3:::failoverbucket-*"
+			]
+		},
+		{
+			"Effect": "Allow",
+			"Action": [
+				"s3:GetObject",
+				"s3:ListBucket"
+			],
+			"Resource": [
+				"arn:aws:s3:::*"
+			]
+		},
+		{
+			"Effect": "Allow",
+			"Action": [
+				"iam:CreateRole",
+				"iam:DeleteRole",
+				"iam:AttachRolePolicy",
+				"iam:DetachRolePolicy",
+				"iam:PutRolePolicy",
+				"iam:DeleteRolePolicy",
+				"iam:PassRole"
+			],
+			"Resource": "arn:aws:iam::*:role/*"
+		},
+		{
+			"Effect": "Allow",
+			"Action": [
+				"lambda:CreateFunction",
+				"lambda:DeleteFunction",
+				"lambda:UpdateFunctionCode",
+				"lambda:UpdateFunctionConfiguration",
+				"lambda:AddPermission",
+				"lambda:RemovePermission",
+				"lambda:DeleteLayerVersion",
+				"lambda:PublishLayerVersion"
+			],
+			"Resource": [
+				"arn:aws:lambda:*:*:function:*",
+				"arn:aws:lambda:*:*:layer:*"
+			]
+		},
+		{
+			"Effect": "Allow",
+			"Action": [
+				"apigateway:*"
+			],
+			"Resource": "arn:aws:apigateway:*::/restapis/*"
+		},
+		{
+			"Effect": "Allow",
+			"Action": [
+				"mediapackage:*"
+			],
+			"Resource": [
+				"arn:aws:mediapackage:*:*:packaging-groups/*",
+				"arn:aws:mediapackage:*:*:packaging-configurations/*",
+				"arn:aws:mediapackage:*:*:assets/*"
+			]
+		},
+		{
+			"Effect": "Allow",
+			"Action": [
+				"cloudformation:DescribeStacks",
+				"cloudformation:DescribeStackEvents",
+				"cloudformation:DescribeStackResources"
+			],
+			"Resource": "*"
+		}
+	]
+}
