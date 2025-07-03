@@ -178,7 +178,7 @@ Resources:
   MediaPackageGroup:
     Type: 'AWS::MediaPackage::PackagingGroup'
     Properties:
-      Id: !Sub '${AWS::StackName}-packaginggroup'
+      Id: !Sub 'soa-mediapackage-packaginggroup'
       # Tạo nhóm đóng gói Media Package với ID dựa trên tên stack.
     # Nhóm đóng gói này được sử dụng để định nghĩa cách nội dung video được đóng gói.
 
@@ -193,7 +193,7 @@ Resources:
         # Đặt độ dài phân đoạn video là 3 giây.
       Id: !Sub '${AWS::StackName}-packagingconfiguration'
       # ID của cấu hình đóng gói, dựa trên tên stack.
-      PackagingGroupId: !Sub '${AWS::StackName}-packaginggroup'
+      PackagingGroupId: !Sub 'soa-mediapackage-packaginggroup'
       # Liên kết cấu hình này với nhóm đóng gói đã tạo.
     DependsOn: MediaPackageGroup 
     # Phụ thuộc: cần tạo MediaPackageGroup trước khi tạo cấu hình này.
@@ -204,7 +204,7 @@ Resources:
     Properties:
       Id: !Sub '${AWS::StackName}-asset'
       # ID của tài sản Media Package, dựa trên tên stack.
-      PackagingGroupId: !Sub '${AWS::StackName}-packaginggroup'
+      PackagingGroupId: !Sub 'soa-mediapackage-packaginggroup'
       # Liên kết tài sản này với nhóm đóng gói đã tạo.
       SourceArn: 
         !Join
@@ -373,7 +373,7 @@ Resources:
       Code: 
         S3Bucket: !Ref AssetsBucketName
         # Bucket S3 chứa mã nguồn của hàm Lambda.
-        S3Key: function/echo.zip'
+        S3Key: 'function/echo.zip'
         # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'echo'.
       Role: !GetAtt LambdaRoleEcho.Arn
       # ARN của vai trò IAM được gán cho hàm Lambda này.
@@ -394,7 +394,7 @@ Resources:
       Code:
         S3Bucket: !Ref AssetsBucketName
         # Bucket S3 chứa mã nguồn của hàm Lambda.
-        S3Key: function/login.zip'
+        S3Key: 'function/login.zip'
         # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'login'.
       Role: !GetAtt LambdaRoleLogin.Arn
       # ARN của vai trò IAM được gán cho hàm Lambda này.
@@ -423,7 +423,7 @@ Resources:
       Code:
         S3Bucket: !Ref AssetsBucketName
         # Bucket S3 chứa mã nguồn của hàm Lambda.
-        S3Key: function/logout.zip'
+        S3Key: 'function/logout.zip'
         # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'logout'.
       Role: !GetAtt LambdaRoleLogout.Arn
       # ARN của vai trò IAM được gán cho hàm Lambda này.
@@ -444,7 +444,7 @@ Resources:
       Code:
         S3Bucket: !Ref AssetsBucketName
         # Bucket S3 chứa mã nguồn của hàm Lambda.
-        S3Key: function/sessionvalue.zip'
+        S3Key: 'function/sessionvalue.zip'
         # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'sessionvalue'.
       Role: !GetAtt LambdaRoleSessionvalue.Arn
       # ARN của vai trò IAM được gán cho hàm Lambda này.
@@ -473,7 +473,7 @@ Resources:
       Code:
         S3Bucket: !Ref AssetsBucketName
         # Bucket S3 chứa mã nguồn của hàm Lambda.
-        S3Key: function/getplayurl.zip'
+        S3Key: 'function/getplayurl.zip'
         # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'getplayurl'.
       Role: !GetAtt LambdaRoleGetplayurl.Arn
       # ARN của vai trò IAM được gán cho hàm Lambda này.
@@ -504,7 +504,7 @@ Resources:
       Code:
         S3Bucket: !Ref AssetsBucketName
         # Bucket S3 chứa mã nguồn của hàm Lambda.
-        S3Key: function/getsignedcookie.zip'
+        S3Key: 'function/getsignedcookie.zip'
         # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'getsignedcookie'.
       Role: !GetAtt LambdaRoleGetsignedcookie.Arn
       # ARN của vai trò IAM được gán cho hàm Lambda này.
@@ -539,7 +539,7 @@ Resources:
       Code:
         S3Bucket: !Ref AssetsBucketName
         # Bucket S3 chứa mã nguồn của hàm Lambda.
-        S3Key: function/fle.zip'
+        S3Key: 'function/fle.zip'
         # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'fle'.
       Role: !GetAtt LambdaRoleFle.Arn
       # ARN của vai trò IAM được gán cho hàm Lambda này.
@@ -564,7 +564,7 @@ Resources:
       Code:
         S3Bucket: !Ref AssetsBucketName
         # Bucket S3 chứa mã nguồn của hàm Lambda.
-        S3Key: function/teststaleobject.zip'
+        S3Key: 'function/teststaleobject.zip'
         # Đường dẫn đến tệp zip chứa mã nguồn của hàm 'teststaleobject'.
       Role: !GetAtt LambdaRoleTestStaleObject.Arn
       # ARN của vai trò IAM được gán cho hàm Lambda này.
@@ -1059,7 +1059,7 @@ Resources:
       Code:
         S3Bucket: !Ref AssetsBucketName
         # Bucket S3 chứa mã nguồn của hàm Lambda.
-        S3Key: autodeletefunction-new.zip'
+        S3Key: 'autodeletefunction-new.zip'
         # Đường dẫn đến tệp zip chứa mã nguồn của hàm tự động xóa.
       Timeout: 900
       # Thời gian chờ tối đa: 900 giây (15 phút).
@@ -1147,7 +1147,7 @@ Resources:
       Code:
         S3Bucket: !Ref AssetsBucketName
         # Bucket S3 chứa mã nguồn của hàm Lambda.
-        S3Key: filedeployfunction-new.zip'
+        S3Key: 'filedeployfunction-new.zip'
         # Đường dẫn đến tệp zip chứa mã nguồn của hàm triển khai tệp.
       Environment:
         Variables:
@@ -1177,7 +1177,7 @@ Resources:
       Content:
         S3Bucket: !Ref AssetsBucketName
         # Bucket S3 chứa nội dung của layer.
-        S3Key: awsclilayer-new.zip'
+        S3Key: 'awsclilayer-new.zip'
         # Đường dẫn đến tệp zip chứa AWS CLI cho layer.
       Description: 'This layer is used in S3 Bucket Deploy Function'
       # Mô tả: layer này được sử dụng trong hàm triển khai S3.
@@ -1192,7 +1192,7 @@ Resources:
         - !Ref AssetsBucketName
         # Bucket nguồn: AssetsBucketName.
       SourceObjectKeys:
-        - demosite.zip'
+        - 'demosite.zip'
         # Khóa đối tượng nguồn: tệp demosite.zip trong AssetsBucket.
       DestinationBucketName: !Ref OriginBucket
       # Bucket đích: OriginBucket.
@@ -1213,7 +1213,7 @@ Resources:
         - !Ref AssetsBucketName
         # Bucket nguồn: AssetsBucketName.
       SourceObjectKeys:
-        - demovideo.zip'
+        - 'demovideo.zip'
         # Khóa đối tượng nguồn: tệp demovideo.zip trong AssetsBucket.
       DestinationBucketName: !Ref VideoBucket
       # Bucket đích: VideoBucket.
@@ -1234,7 +1234,7 @@ Resources:
         - !Ref AssetsBucketName
         # Bucket nguồn: AssetsBucketName.
       SourceObjectKeys:
-        - demosite.zip'
+        - 'demosite.zip'
         # Khóa đối tượng nguồn: tệp demosite.zip trong AssetsBucket.
       DestinationBucketName: !Ref FailoverBucket
       # Bucket đích: FailoverBucket.
