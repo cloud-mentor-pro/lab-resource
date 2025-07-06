@@ -1,0 +1,48 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create an S3 bucket with public access blocked and a service role for CloudFormation.
+
+Parameters:
+  BucketPostfix:
+    Type: String
+    Description: Postfix to append to the S3 bucket name (e.g., 001).
+    MinLength: 1
+    MaxLength: 10
+    AllowedPattern: '[a-zA-Z0-9]+'
+    ConstraintDescription: Postfix must be alphanumeric and between 1-10 characters.
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'soa-s3-bucket-cloudfront-lab-${BucketPostfix}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  CloudFormationServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: soa-iam-role-cloudformation-section7-lab
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+
+Outputs:
+  BucketName:
+    Description: Name of the created S3 bucket
+    Value: !Ref S3Bucket
+  RoleName:
+    Description: Name of the CloudFormation service role
+    Value: !Ref CloudFormationServiceRole
