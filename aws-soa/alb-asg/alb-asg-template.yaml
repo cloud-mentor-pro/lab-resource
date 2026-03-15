@@ -9,9 +9,10 @@ Parameters:
   InstanceType:
     Description: EC2 instance type
     Type: String
-    Default: t2.micro
+    Default: t3.micro
     AllowedValues:
       - t2.micro
+      - t3.micro
       - t3.medium
 
   ServiceName:

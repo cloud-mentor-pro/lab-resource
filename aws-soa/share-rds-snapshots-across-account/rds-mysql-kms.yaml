@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template to create RDS MySQL database with security group'
+
+Parameters:
+  MasterPassword:
+    Type: String
+    Description: 'Master password for RDS instance'
+    Default: 'MyPassword1!'
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 128
+    AllowedPattern: '^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$'
+    ConstraintDescription: 'Password must contain at least 8 characters with uppercase, lowercase, number and special character'
+  
+  AllowedCIDR:
+    Type: String
+    Description: 'CIDR block allowed to access MySQL database'
+    Default: '0.0.0.0/0'
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: 'Must be a valid CIDR notation (e.g., 10.0.0.0/16)'
+
+Resources:
+  # KMS Key for RDS Snapshots
+  RDSSnapshotKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: 'Customer managed KMS key for RDS MySQL snapshot encryption'
+      KeyUsage: ENCRYPT_DECRYPT
+      KeySpec: SYMMETRIC_DEFAULT
+      MultiRegion: false
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow RDS Service
+            Effect: Allow
+            Principal:
+              Service: rds.amazonaws.com
+            Action:
+              - 'kms:CreateGrant'
+              - 'kms:Encrypt'
+              - 'kms:Decrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+              - 'kms:DescribeKey'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'kms:ViaService': !Sub 'rds.${AWS::Region}.amazonaws.com'
+      Tags:
+        - Key: Name
+          Value: 'RDS-Snapshot-KMS-Key'
+        - Key: Purpose
+          Value: 'RDS MySQL Snapshot Encryption'
+        - Key: Application
+          Value: 'SOA'
+
+  # KMS Key Alias
+  RDSSnapshotKMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: 'alias/d-rds-soa-mysql-snapshot-key'
+      TargetKeyId: !Ref RDSSnapshotKMSKey
+
+  # Security Group for RDS
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security group for SOA MySQL RDS database'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: !Ref AllowedCIDR
+          Description: !Sub 'Allow MySQL access from ${AllowedCIDR}'
+      Tags:
+        - Key: Name
+          Value: 'd-sg-SOA-mysql-db'
+        - Key: Purpose
+          Value: 'RDS MySQL Security Group'
+
+  # RDS MySQL Database Instance  
+  MySQLDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      # Basic Configuration
+      DBInstanceIdentifier: 'd-rds-SOA-mysql-db'
+      DBName: 'mydb'
+      
+      # Engine Configuration
+      Engine: 'mysql'
+      EngineVersion: '8.0'
+      
+      # Instance Configuration
+      DBInstanceClass: 'db.t3.micro'
+      AllocatedStorage: '20'
+      MaxAllocatedStorage: 100
+      StorageType: 'gp2'
+      StorageEncrypted: true
+      
+      # Master User Configuration
+      MasterUsername: 'admin'
+      MasterUserPassword: !Ref MasterPassword
+      
+      # Network Configuration
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      PubliclyAccessible: true
+      
+      # Backup and Maintenance Configuration
+      BackupRetentionPeriod: 0
+      DeleteAutomatedBackups: true
+      DeletionProtection: false
+      
+      # Monitoring and Performance
+      MonitoringInterval: 0
+      EnableCloudwatchLogsExports: []
+      
+      # Additional Settings
+      MultiAZ: false
+      AutoMinorVersionUpgrade: true
+      AllowMajorVersionUpgrade: false
+      
+      # Tags
+      Tags:
+        - Key: Name
+          Value: 'd-rds-SOA-mysql-db'
+        - Key: Environment
+          Value: 'Development'
+        - Key: Application
+          Value: 'SOA'
+        - Key: Engine
+          Value: 'MySQL'
+
+Outputs:
+  DatabaseEndpoint:
+    Description: 'RDS MySQL Database Endpoint'
+    Value: !GetAtt MySQLDatabase.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseEndpoint'
+      
+  DatabasePort:
+    Description: 'RDS MySQL Database Port'
+    Value: !GetAtt MySQLDatabase.Endpoint.Port
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabasePort'
+      
+  DatabaseName:
+    Description: 'Initial Database Name'
+    Value: 'mydb'
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseName'
+      
+  SecurityGroupId:
+    Description: 'Security Group ID for RDS'
+    Value: !Ref RDSSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-SecurityGroupId'
+      
+  KMSKeyId:
+    Description: 'KMS Key ID for RDS Snapshot Encryption'
+    Value: !Ref RDSSnapshotKMSKey
+    Export:
+      Name: !Sub '${AWS::StackName}-KMSKeyId'
+      
+  KMSKeyAlias:
+    Description: 'KMS Key Alias for RDS Snapshot Encryption'
+    Value: !Ref RDSSnapshotKMSKeyAlias
+    Export:
+      Name: !Sub '${AWS::StackName}-KMSKeyAlias'
+      
+  KMSKeyArn:
+    Description: 'KMS Key ARN for RDS Snapshot Encryption'
+    Value: !GetAtt RDSSnapshotKMSKey.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-KMSKeyArn'
+      
+  ConnectionExample:
+    Description: 'MySQL Connection Example (without password)'
+    Value: !Sub 'mysql://admin:****@${MySQLDatabase.Endpoint.Address}:${MySQLDatabase.Endpoint.Port}/mydb'
+    Export:
+      Name: !Sub '${AWS::StackName}-ConnectionExample'

@@ -269,7 +269,7 @@ Resources:
       VersionDescription: web api
       LaunchTemplateData:
         ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64}}'
-        InstanceType: t2.micro
+        InstanceType: t3.micro
         KeyName: !Ref KeyPairName
         IamInstanceProfile:
           Arn: !GetAtt SoaInstanceProfileEc2SsmAccess.Arn
@@ -361,7 +361,7 @@ Resources:
       - SoaIgwMainAttachment
     Properties:
       ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64}}'
-      InstanceType: t2.micro
+      InstanceType: t3.micro
       KeyName: !Ref KeyPairName
       SubnetId: !Ref SoaSubnetPublic01
       IamInstanceProfile: !Ref SoaInstanceProfileEc2SsmAccess

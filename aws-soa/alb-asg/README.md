@@ -67,7 +67,7 @@ Template này tạo ra một hệ thống web application infrastructure hoàn c
 |----------|-------|-------|
 | **Name** | `soa-lt-web-server` | Template cho EC2 instances |
 | **AMI** | Latest Amazon Linux 2023 | Tự động lấy từ SSM Parameter |
-| **Instance Type** | `t2.micro` (parameter) | Có thể thay đổi qua parameter |
+| **Instance Type** | `t3.micro` (parameter) | Có thể thay đổi qua parameter |
 | **Security** | No SSH, chỉ SSM | Secure access only |
 | **User Data** | Apache web server | Tự động cài và chạy web server |
 
@@ -116,7 +116,7 @@ Template này tạo ra một hệ thống web application infrastructure hoàn c
 | Parameter | Default | Options | Mô tả |
 |-----------|---------|---------|-------|
 | **KeyName** | Required | Existing Key Pair | EC2 Key Pair (dù không dùng SSH) |
-| **InstanceType** | `t2.micro` | `t2.micro`, `t3.medium` | EC2 instance type |
+| **InstanceType** | `t3.micro` | `t2.micro`, `t3.micro`, `t3.medium` | EC2 instance type |
 | **ServiceName** | `web` | Custom string | Naming convention prefix |
 
 ---
@@ -147,7 +147,7 @@ Tất cả resources được tag với:
 
 - ✅ **Single NAT Gateway** thay vì 2 (tiết kiệm ~$45/tháng)
 - ✅ **S3 VPC Endpoint FREE** (Gateway type)
-- ✅ **t2.micro instances** (AWS Free Tier eligible)
+- ✅ **t3.micro instances** (Better performance vs t2.micro, cost-effective)
 - ✅ **Shared Route Tables** (giảm complexity)
 
 ---
