@@ -107,13 +107,9 @@ Resources:
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: -1
-          FromPort: -1
-          ToPort: -1
           CidrIp: 10.0.0.0/22
       SecurityGroupEgress:
         - IpProtocol: -1
-          FromPort: -1
-          ToPort: -1
           CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
@@ -127,13 +123,9 @@ Resources:
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: -1
-          FromPort: -1
-          ToPort: -1
           SourceSecurityGroupId: !Ref PublicSecurityGroup
       SecurityGroupEgress:
         - IpProtocol: -1
-          FromPort: -1
-          ToPort: -1
           CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
@@ -246,6 +238,19 @@ Resources:
     Type: AWS::EC2::VPCEndpoint
     Properties:
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssmmessages'
+      VpcId: !Ref VPC
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnet
+        - !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+  EC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2messages'
       VpcId: !Ref VPC
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
