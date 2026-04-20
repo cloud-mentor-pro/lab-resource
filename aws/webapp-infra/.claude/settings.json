@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(aws cloudformation validate-template*)",
+      "Bash(aws cloudformation create-change-set*)",
+      "Bash(aws cloudformation describe-change-set*)",
+      "Bash(aws cloudformation execute-change-set*)",
+      "Bash(aws cloudformation describe-stacks*)",
+      "Bash(aws cloudformation describe-stack-events*)",
+      "Bash(aws cloudformation describe-stack-resources*)",
+      "Bash(aws cloudformation list-stacks*)",
+      "Bash(aws cloudformation get-template*)",
+      "Bash(aws cloudformation detect-stack-drift*)",
+      "Bash(aws cloudformation describe-stack-drift-detection-status*)",
+      "Bash(aws cloudformation describe-stack-resource-drifts*)",
+      "Bash(aws cloudformation list-exports*)",
+      "Bash(cfn-lint*)",
+      "Bash(cfn_nag_scan*)",
+      "Bash(checkov*)"
+    ],
+    "deny": [
+      "Bash(aws cloudformation delete-stack*)",
+      "Bash(aws iam create-user*)",
+      "Bash(aws iam create-access-key*)",
+      "Bash(aws iam delete-role*)",
+      "Bash(aws iam delete-policy*)",
+      "Bash(cat parameters/prod.json*)",
+      "Bash(cat CLAUDE.local.md*)"
+    ]
+  }
+}

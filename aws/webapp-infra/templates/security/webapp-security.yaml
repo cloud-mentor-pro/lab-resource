@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'webapp - Security layer: Security Groups, IAM Role + Instance Profile for SSM'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+
+  NetworkingStackName:
+    Type: String
+    Description: Name of the networking stack (e.g. dev-webapp-networking)
+
+Resources:
+
+  # ── Security Groups ────────────────────────────────────────────────────────
+  SecurityGroupAlb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB - allow HTTP and HTTPS from internet
+      GroupName: !Sub '${Environment}-webapp-sg-alb'
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkingStackName}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP from internet (redirect to HTTPS)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS from internet
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-webapp-sg-alb' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: webapp }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: security }
+
+  SecurityGroupEc2:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EC2 - allow HTTP from ALB only
+      GroupName: !Sub '${Environment}-webapp-sg-ec2'
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkingStackName}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref SecurityGroupAlb
+          Description: HTTP from ALB only - never open to internet directly
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-webapp-sg-ec2' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: webapp }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: security }
+
+  # ── IAM Role for EC2 (SSM — no KeyPair needed) ────────────────────────────
+  IamRoleEc2Ssm:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-webapp-role-ec2-ssm'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Minimal policy required for SSM Session Manager
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-webapp-role-ec2-ssm' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: webapp }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: security }
+
+  IamInstanceProfileEc2:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${Environment}-webapp-profile-ec2'
+      Roles:
+        - !Ref IamRoleEc2Ssm
+
+Outputs:
+  SecurityGroupAlbId:
+    Value: !Ref SecurityGroupAlb
+    Export: { Name: !Sub '${AWS::StackName}-SecurityGroupAlbId' }
+
+  SecurityGroupEc2Id:
+    Value: !Ref SecurityGroupEc2
+    Export: { Name: !Sub '${AWS::StackName}-SecurityGroupEc2Id' }
+
+  IamInstanceProfileEc2Name:
+    Value: !Ref IamInstanceProfileEc2
+    Export: { Name: !Sub '${AWS::StackName}-IamInstanceProfileEc2Name' }
+
+  IamRoleEc2SsmArn:
+    Value: !GetAtt IamRoleEc2Ssm.Arn
+    Export: { Name: !Sub '${AWS::StackName}-IamRoleEc2SsmArn' }

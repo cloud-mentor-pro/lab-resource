@@ -1,0 +1,21 @@
+# Environment-specific — chứa account ID, hosted zone ID
+parameters/dev-networking.json
+parameters/dev-security.json
+parameters/dev-compute.json
+parameters/prod-networking.json
+parameters/prod-security.json
+parameters/prod-compute.json
+
+# Personal Claude overrides
+.claude/CLAUDE.local.md
+.claude/settings.local.json
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# cfn-lint cache
+.cfnlintrc

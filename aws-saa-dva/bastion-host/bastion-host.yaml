@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Bastion Host with Security Group allowing SSH and HTTP from internet'
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: 'Select an existing EC2 Key Pair for SSH access'
+
+  AmazonLinux2023AMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64'
+    Description: 'Amazon Linux 2023 latest AMI'
+
+Resources:
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: 'd-sg-SAA-basion-host'
+      GroupDescription: 'Allow ssh and http from internet'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: 'Allow SSH from internet'
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: 'Allow HTTP from internet'
+      Tags:
+        - Key: Name
+          Value: 'd-sg-SAA-basion-host'
+
+  BastionEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: !Ref AmazonLinux2023AMI
+      KeyName: !Ref KeyPairName
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd.x86_64
+          systemctl start httpd.service
+          systemctl enable httpd.service
+          echo "Hello World from $(hostname -f)" > /var/www/html/index.html
+      Tags:
+        - Key: Name
+          Value: 'd-ec2-SAA-bastion-host'
+
+Outputs:
+  InstanceId:
+    Description: 'EC2 Instance ID'
+    Value: !Ref BastionEC2Instance
+  PublicIP:
+    Description: 'Public IP of Bastion Host'
+    Value: !GetAtt BastionEC2Instance.PublicIp
+  PublicDNS:
+    Description: 'Public DNS of Bastion Host'
+    Value: !GetAtt BastionEC2Instance.PublicDnsName
+  SecurityGroupId:
+    Description: 'Security Group ID'
+    Value: !Ref BastionSecurityGroup
