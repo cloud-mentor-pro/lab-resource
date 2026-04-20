@@ -28,8 +28,6 @@ Internet
 EC2 access: SSM Session Manager — không cần KeyPair, không cần SSH, không cần Bastion
 ```
 
-> 📐 [Xem sơ đồ cấu trúc project (draw.io)](Diagram.drawio)
-
 ---
 
 ## Stack Order
@@ -113,6 +111,8 @@ aws cloudformation delete-stack --stack-name dev-webapp-networking --profile clo
 ---
 
 ## Project Structure
+
+![Project Structure](Diagram.drawio.svg)
 
 ```
 webapp-infra/
