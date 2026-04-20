@@ -1,0 +1,9 @@
+[
+  { "ParameterKey": "Environment",         "ParameterValue": "dev" },
+  { "ParameterKey": "NetworkingStackName", "ParameterValue": "dev-webapp-networking" },
+  { "ParameterKey": "SecurityStackName",   "ParameterValue": "dev-webapp-security" },
+  { "ParameterKey": "InstanceType",        "ParameterValue": "t3.micro" },
+  { "ParameterKey": "SubDomain",           "ParameterValue": "sampleproject" },
+  { "ParameterKey": "HostedZoneName",      "ParameterValue": "cloudmentor-pro.click" },
+  { "ParameterKey": "HostedZoneId",        "ParameterValue": "Z0524693QNJ2X8KTLB7O" }
+]

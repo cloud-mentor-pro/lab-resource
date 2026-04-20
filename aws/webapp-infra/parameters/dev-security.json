@@ -1,0 +1,4 @@
+[
+  { "ParameterKey": "Environment",         "ParameterValue": "dev" },
+  { "ParameterKey": "NetworkingStackName", "ParameterValue": "dev-webapp-networking" }
+]

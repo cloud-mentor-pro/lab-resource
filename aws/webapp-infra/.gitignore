@@ -1,7 +1,4 @@
-# Environment-specific — chứa account ID, hosted zone ID
-parameters/dev-networking.json
-parameters/dev-security.json
-parameters/dev-compute.json
+# Prod parameters — chứa account ID, hosted zone ID thật
 parameters/prod-networking.json
 parameters/prod-security.json
 parameters/prod-compute.json
